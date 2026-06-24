@@ -1,0 +1,61 @@
+require("dotenv").config();
+
+const express = require("express");
+const path = require("path");
+const pool = require("./config/db");
+const adminRoutes = require("./routes/adminRoutes");
+const authRoutes = require("./routes/authRoutes");
+const privateRoutes = require("./routes/privateRoutes");
+const productRoutes = require("./routes/productRoutes");
+const {
+  applySecurityMiddleware,
+  cookieCsrfGuard,
+  issueCsrfToken,
+  securityErrorHandler,
+} = require("./middleware/security");
+
+const app = express();
+
+applySecurityMiddleware(app);
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: false, limit: "100kb" }));
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
+app.get("/api/security/csrf-token", issueCsrfToken);
+app.use(cookieCsrfGuard);
+
+app.use("/api/products", productRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api", privateRoutes);
+app.use("/api/admin", adminRoutes);
+
+app.get("/", (req, res) => {
+  res.send("SportX Backend Running");
+});
+
+app.get("/test-db", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT NOW()");
+    res.json(result.rows);
+  } catch (error) {
+    console.error("Database health check failed:", error);
+    res.status(500).json({ message: "Database health check failed." });
+  }
+});
+
+app.use(securityErrorHandler);
+app.use((error, req, res, next) => {
+  console.error("Unhandled server error:", error);
+  const message =
+    process.env.NODE_ENV === "production"
+      ? "Something went wrong."
+      : error.message || "Something went wrong.";
+
+  return res.status(error.status || 500).json({ message });
+});
+
+const PORT = process.env.PORT || 5000;
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});

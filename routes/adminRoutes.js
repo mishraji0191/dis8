@@ -55,5 +55,6 @@ router.get("/orders", adminAuth, orderController.listOrders);
 router.get("/orders/:id", adminAuth, orderController.getOrderById);
 router.put("/orders/:id/status", adminAuth, idParamRule, validateRequest, orderController.updateOrderStatus);
 router.delete("/orders/:id", adminAuth, idParamRule, validateRequest, orderController.deleteOrder);
+router.get("/payments", adminAuth, orderController.listPayments);
 
 module.exports = router;

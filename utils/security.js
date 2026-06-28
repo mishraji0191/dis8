@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 
 const ACCESS_TOKEN_COOKIE = "dis8_access_token";
+const REFRESH_TOKEN_COOKIE = "dis8_refresh_token";
 const CSRF_COOKIE = "dis8_csrf_token";
 const CSRF_HEADER = "x-csrf-token";
 
@@ -77,6 +78,7 @@ function logSecurityEvent(event, req, metadata = {}) {
 
 module.exports = {
   ACCESS_TOKEN_COOKIE,
+  REFRESH_TOKEN_COOKIE,
   CSRF_COOKIE,
   CSRF_HEADER,
   generateNumericCode,

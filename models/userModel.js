@@ -4,11 +4,27 @@ const USER_COLUMNS =
   "id, name, email, phone, password_hash, role, email_verified, phone_verified, two_factor_enabled, referral_code, created_at";
 
 function normalizeEmail(email) {
+  if (!email) return null;
   return email.trim().toLowerCase();
 }
 
 function normalizePhone(phone) {
-  return String(phone || "").replace(/[^\d+]/g, "");
+  const digits = String(phone || "").replace(/\D/g, "");
+
+  if (/^[6-9]\d{9}$/.test(digits)) return `+91${digits}`;
+  if (/^91[6-9]\d{9}$/.test(digits)) return `+${digits}`;
+
+  return digits ? `+${digits}` : null;
+}
+
+function getIndianMobileDigits(phone) {
+  const normalized = normalizePhone(phone);
+  const digits = String(normalized || "").replace(/\D/g, "");
+
+  if (/^91[6-9]\d{9}$/.test(digits)) return digits.slice(2);
+  if (/^[6-9]\d{9}$/.test(digits)) return digits;
+
+  return null;
 }
 
 function toPublicUser(user) {
@@ -26,31 +42,27 @@ function toPublicUser(user) {
 }
 
 async function createUser({ name, email, phone, passwordHash }) {
+  const normalizedEmail = email ? normalizeEmail(email) : null;
+  const normalizedPhone = phone ? normalizePhone(phone) : null;
   const result = await pool.query(
     `INSERT INTO users (name, email, phone, password_hash, role, referral_code)
      VALUES ($1, $2, $3, $4, 'user', UPPER(SUBSTRING(MD5(RANDOM()::text || CLOCK_TIMESTAMP()::text), 1, 8)))
      RETURNING ${USER_COLUMNS}`,
-    [name, normalizeEmail(email), phone ? normalizePhone(phone) : null, passwordHash]
+    [name, normalizedEmail, normalizedPhone, passwordHash || null]
   );
 
   return result.rows[0];
 }
 
-async function findOrCreateOtpUser({ email, phone, name }) {
-  const normalizedEmail = email ? normalizeEmail(email) : null;
-  const normalizedPhone = phone ? normalizePhone(phone) : null;
-
-  const existing = normalizedEmail
-    ? await findUserByEmail(normalizedEmail)
-    : await findUserByPhone(normalizedPhone);
+async function findOrCreateMobileOtpUser({ phone, name }) {
+  const normalizedPhone = normalizePhone(phone);
+  const existing = await findUserByPhone(normalizedPhone);
 
   if (existing) return existing;
 
-  const syntheticEmail = normalizedEmail || `${normalizedPhone.replace(/[^\d]/g, "")}@otp.dis8.local`;
-
   return createUser({
     name: name || "DIS8 Customer",
-    email: syntheticEmail,
+    email: null,
     phone: normalizedPhone,
     passwordHash: null,
   });
@@ -65,9 +77,18 @@ async function findUserByEmail(email) {
 }
 
 async function findUserByPhone(phone) {
-  const result = await pool.query(`SELECT ${USER_COLUMNS} FROM users WHERE phone = $1`, [
-    normalizePhone(phone),
-  ]);
+  const normalizedPhone = normalizePhone(phone);
+  const mobileDigits = getIndianMobileDigits(phone);
+  const lookupDigits = mobileDigits ? [`91${mobileDigits}`, mobileDigits] : [];
+  const result = await pool.query(
+    `SELECT ${USER_COLUMNS}
+     FROM users
+     WHERE phone = $1
+        OR regexp_replace(COALESCE(phone, ''), '\\D', '', 'g') = ANY($2::text[])
+     ORDER BY phone_verified DESC, created_at ASC
+     LIMIT 1`,
+    [normalizedPhone, lookupDigits]
+  );
 
   return result.rows[0] || null;
 }
@@ -103,10 +124,11 @@ async function setTwoFactorEnabled(userId, enabled) {
 
 module.exports = {
   createUser,
-  findOrCreateOtpUser,
+  findOrCreateMobileOtpUser,
   findUserByEmail,
   findUserById,
   findUserByPhone,
+  getIndianMobileDigits,
   markPhoneVerified,
   markEmailVerified,
   normalizePhone,

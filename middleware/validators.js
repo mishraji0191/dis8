@@ -34,66 +34,52 @@ const passwordRule = () =>
     .isLength({ min: 8 })
     .withMessage("Password must be at least 8 characters.");
 
-const registerRules = [
-  body("name")
-    .customSanitizer(cleanString)
-    .isLength({ min: 2, max: 120 })
-    .withMessage("Name must be between 2 and 120 characters."),
-  emailRule(),
-  passwordRule(),
-  body("phone").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 30 }),
-];
-
 const loginRules = [emailRule(), passwordRule()];
 
-const otpLoginRequestRules = [
-  body("email").optional({ checkFalsy: true }).trim().isEmail().normalizeEmail(),
-  body("phone")
-    .optional({ checkFalsy: true })
-    .customSanitizer(cleanString)
-    .isLength({ min: 7, max: 16 })
-    .withMessage("A valid phone number is required."),
-  body("name").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 120 }),
-  body("channel").optional({ checkFalsy: true }).isIn(["email", "sms"]),
-  body().custom((value) => {
-    if (!value.email && !value.phone) {
-      throw new Error("Email or phone is required.");
-    }
-    return true;
+const removedCustomerAuthRules = [
+  body().custom(() => {
+    throw new Error("This authentication method is no longer available. Use mobile OTP login.");
   }),
 ];
 
+const indianMobileRule = () =>
+  body("phone")
+    .customSanitizer(cleanString)
+    .custom((value) => {
+      const digits = String(value || "").replace(/\D/g, "");
+
+      if (!/^(91)?[6-9]\d{9}$/.test(digits)) {
+        throw new Error("Enter a valid 10-digit Indian mobile number.");
+      }
+
+      return true;
+    });
+
+const otpLoginRequestRules = [indianMobileRule()];
+
 const otpLoginVerifyRules = [
-  body("email").optional({ checkFalsy: true }).trim().isEmail().normalizeEmail(),
-  body("phone").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ min: 7, max: 16 }),
-  body("otp").trim().isLength({ min: 6, max: 6 }).isNumeric().withMessage("A valid OTP is required."),
+  indianMobileRule(),
+  body("otp")
+    .trim()
+    .isLength({ min: 6, max: 6 })
+    .isNumeric()
+    .withMessage("Enter the 6-digit OTP."),
   body("rememberDevice").optional().isBoolean(),
-  body().custom((value) => {
-    if (!value.email && !value.phone) {
-      throw new Error("Email or phone is required.");
-    }
-    return true;
-  }),
 ];
 
 const otpRules = [
-  emailRule(),
-  body("otp").trim().isLength({ min: 6, max: 6 }).isNumeric().withMessage("A valid OTP is required."),
-  body("purpose")
-    .optional({ checkFalsy: true })
-    .isIn(["email_verification", "two_factor"])
-    .withMessage("Invalid OTP purpose."),
+  body().custom(() => {
+    throw new Error("Email OTP is no longer available. Use mobile OTP login.");
+  }),
 ];
+
+const registerRules = removedCustomerAuthRules;
+const forgotPasswordRules = removedCustomerAuthRules;
+const resetPasswordRules = removedCustomerAuthRules;
+const customerLoginRules = removedCustomerAuthRules;
 
 const twoFactorOtpRules = [
   body("otp").trim().isLength({ min: 6, max: 6 }).isNumeric().withMessage("A valid OTP is required."),
-];
-
-const forgotPasswordRules = [emailRule()];
-
-const resetPasswordRules = [
-  body("token").trim().isLength({ min: 32 }).withMessage("A valid reset token is required."),
-  passwordRule(),
 ];
 
 const checkoutRules = [
@@ -151,6 +137,7 @@ const cartItemRules = [
 
 module.exports = {
   checkoutRules,
+  customerLoginRules,
   forgotPasswordRules,
   idParamRule,
   loginRules,

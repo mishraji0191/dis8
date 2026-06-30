@@ -5,6 +5,9 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS email VARCHAR(255);
 
 ALTER TABLE users
+ALTER COLUMN email DROP NOT NULL;
+
+ALTER TABLE users
 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
 ALTER TABLE users
@@ -14,7 +17,7 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20);
 
 UPDATE users
-SET referral_code = UPPER(SUBSTRING(MD5(id::text || email || created_at::text), 1, 8))
+SET referral_code = UPPER(SUBSTRING(MD5(id::text || COALESCE(email, '') || COALESCE(phone, '') || created_at::text), 1, 8))
 WHERE referral_code IS NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx
@@ -24,6 +27,12 @@ WHERE phone IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code_unique_idx
 ON users (referral_code)
 WHERE referral_code IS NOT NULL;
+
+ALTER TABLE login_attempts
+ADD COLUMN IF NOT EXISTS phone VARCHAR(30);
+
+CREATE INDEX IF NOT EXISTS login_attempts_phone_created_idx
+ON login_attempts (phone, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   id BIGSERIAL PRIMARY KEY,

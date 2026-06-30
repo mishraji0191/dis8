@@ -15,7 +15,7 @@ function auth(req, res, next) {
   const token = getRequestToken(req);
 
   if (!process.env.JWT_SECRET) {
-    return res.status(500).json({ message: "JWT secret is not configured." });
+    return res.status(403).json({ message: "JWT secret is not configured." });
   }
 
   if (!token) {

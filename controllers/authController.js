@@ -1,10 +1,8 @@
-const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/userModel");
 const SecurityToken = require("../models/securityTokenModel");
 const UserSession = require("../models/userSessionModel");
 const LoginAttempt = require("../models/loginAttemptModel");
-const Notification = require("../services/notificationService");
 const { sendOtpSms } = require("../services/otpProviderService");
 const {
   ACCESS_TOKEN_COOKIE,
@@ -20,7 +18,32 @@ const ACCESS_TOKEN_MAX_AGE_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const REMEMBER_DEVICE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const OTP_EXPIRY_MINUTES = 10;
-const RESET_EXPIRY_MINUTES = 30;
+const MOBILE_LOGIN_PURPOSE = "phone_login";
+
+function logAuthError(context, error, metadata = {}) {
+  console.error(context, {
+    metadata,
+    message: error?.message,
+    stack: error?.stack,
+    name: error?.name,
+    code: error?.code,
+    detail: error?.detail,
+    hint: error?.hint,
+    table: error?.table,
+    column: error?.column,
+    constraint: error?.constraint,
+    routine: error?.routine,
+    severity: error?.severity,
+  });
+}
+
+function authErrorStatus(error) {
+  if (error?.status) return error.status;
+  if (error?.code === "23505") return 409;
+  if (error?.code?.startsWith?.("23")) return 409;
+  if (error?.code?.startsWith?.("22")) return 400;
+  return 403;
+}
 
 function createUserToken(user) {
   return jwt.sign(User.toPublicUser(user), process.env.JWT_SECRET, {
@@ -42,7 +65,17 @@ function getDeviceName(req) {
   return req.body.deviceName || req.headers["x-device-name"] || req.headers["user-agent"] || "Unknown device";
 }
 
+function ensureJwtConfigured() {
+  if (!process.env.JWT_SECRET) {
+    const error = new Error("JWT secret is not configured.");
+    error.status = 403;
+    throw error;
+  }
+}
+
 async function issueAuthSession(req, res, user, rememberDevice = false) {
+  ensureJwtConfigured();
+
   const accessToken = createUserToken(user);
   const refreshToken = generateSecureToken();
   const refreshMaxAgeMs = rememberDevice ? REMEMBER_DEVICE_MAX_AGE_MS : REFRESH_TOKEN_MAX_AGE_MS;
@@ -61,289 +94,169 @@ async function issueAuthSession(req, res, user, rememberDevice = false) {
   return { accessToken, refreshToken, session };
 }
 
-async function sendOtp(user, purpose, channel = "email") {
+async function sendMobileLoginOtp(user) {
   const otp = generateNumericCode();
   const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
-  await SecurityToken.clearPurpose(user.id, purpose);
-  await SecurityToken.createToken({ userId: user.id, purpose, token: otp, expiresAt });
-
-  if (channel === "sms") {
-    await sendOtpSms({ phone: user.phone, otp, purpose });
-  } else {
-    await Notification.sendOtpEmail({ user, otp, purpose });
-  }
+  await SecurityToken.clearPurpose(user.id, MOBILE_LOGIN_PURPOSE);
+  await SecurityToken.createToken({
+    userId: user.id,
+    purpose: MOBILE_LOGIN_PURPOSE,
+    token: otp,
+    expiresAt,
+  });
+  await sendOtpSms({ phone: user.phone, otp, purpose: MOBILE_LOGIN_PURPOSE });
 
   return { expiresAt };
 }
 
-async function register(req, res) {
-  const { name, email, phone, password } = req.body;
-
-  if (!process.env.JWT_SECRET) {
-    return res.status(500).json({ message: "JWT secret is not configured." });
-  }
-
-  try {
-    const existingUser = await User.findUserByEmail(email);
-
-    if (existingUser) {
-      return res.status(409).json({ message: "An account with this email already exists." });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.createUser({ name, email, phone, passwordHash });
-    await sendOtp(user, "email_verification");
-
-    const { accessToken } = await issueAuthSession(req, res, user, false);
-
-    return res.status(201).json({
-      token: accessToken,
-      user: User.toPublicUser(user),
-      requiresOtpVerification: true,
-    });
-  } catch (error) {
-    if (error.code === "23505") {
-      return res.status(409).json({ message: "An account with this email already exists." });
-    }
-
-    console.error("Unable to register user:", error);
-    return res.status(500).json({ message: "Unable to register user." });
-  }
-}
-
-async function login(req, res) {
-  const { email, password, rememberDevice = false } = req.body;
-
-  if (!process.env.JWT_SECRET) {
-    return res.status(500).json({ message: "JWT secret is not configured." });
-  }
-
-  try {
-    const user = await User.findUserByEmail(email);
-
-    if (!user || !user.password_hash) {
-      await LoginAttempt.recordLoginAttempt(req, { email, success: false, reason: "not_found" });
-      logSecurityEvent("login_failed", req, { email, reason: "not_found" });
-      return res.status(401).json({ message: "Invalid credentials." });
-    }
-
-    const passwordMatches = await bcrypt.compare(password, user.password_hash);
-
-    if (!passwordMatches) {
-      await LoginAttempt.recordLoginAttempt(req, { email, success: false, reason: "bad_password" });
-      logSecurityEvent("login_failed", req, { email, reason: "bad_password" });
-      return res.status(401).json({ message: "Invalid credentials." });
-    }
-
-    if (user.two_factor_enabled) {
-      await sendOtp(user, "two_factor");
-      await LoginAttempt.recordLoginAttempt(req, { email, success: false, reason: "2fa_required" });
-      return res.json({ requiresTwoFactor: true, message: "Two-factor verification required." });
-    }
-
-    const { accessToken } = await issueAuthSession(req, res, user, rememberDevice);
-    await LoginAttempt.recordLoginAttempt(req, { email, success: true, reason: "password" });
-
-    return res.json({ token: accessToken, user: User.toPublicUser(user) });
-  } catch (error) {
-    console.error("Unable to login user:", error);
-    return res.status(500).json({ message: "Unable to login user." });
-  }
-}
-
 async function requestOtpLogin(req, res) {
-  const { email, phone, name, channel = phone ? "sms" : "email" } = req.body;
+  const { phone } = req.body;
 
   try {
-    const user = await User.findOrCreateOtpUser({ email, phone, name });
-    const purpose = phone ? "phone_login" : "email_login";
-    const { expiresAt } = await sendOtp(user, purpose, channel);
+    const user = await User.findOrCreateMobileOtpUser({ phone });
+    const { expiresAt } = await sendMobileLoginOtp(user);
 
     await LoginAttempt.recordLoginAttempt(req, {
       email: user.email,
+      phone: user.phone,
       success: false,
-      reason: `${purpose}_requested`,
+      reason: "phone_login_requested",
     });
 
     return res.status(202).json({
       message: "OTP sent.",
       expiresAt,
-      channel,
-      purpose,
-      userHint: phone || email,
+      channel: "sms",
+      purpose: MOBILE_LOGIN_PURPOSE,
+      mobile: user.phone,
     });
   } catch (error) {
-    console.error("Unable to request login OTP:", error);
-    return res.status(500).json({ message: "Unable to send OTP." });
+    logAuthError("Unable to request mobile login OTP.", error, { phone });
+
+    if (error?.code === "23505") {
+      return res.status(409).json({ message: "Mobile number is already linked to another account." });
+    }
+
+    return res.status(authErrorStatus(error)).json({
+      message: error?.status === 403 ? error.message : "Unable to send OTP. Please try again.",
+    });
   }
 }
 
 async function verifyOtpLogin(req, res) {
-  const { email, phone, otp, rememberDevice = false } = req.body;
-  const purpose = phone ? "phone_login" : "email_login";
+  const { phone, otp, rememberDevice = true } = req.body;
 
   try {
-    const user = phone ? await User.findUserByPhone(phone) : await User.findUserByEmail(email);
+    const user = await User.findUserByPhone(phone);
 
     if (!user) {
-      return res.status(400).json({ message: "Invalid or expired OTP." });
+      return res.status(404).json({ message: "No OTP request found for this mobile number." });
     }
 
-    const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose });
+    const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose: MOBILE_LOGIN_PURPOSE });
 
     if (!tokenRow || Number(tokenRow.user_id) !== Number(user.id)) {
-      logSecurityEvent("otp_login_failed", req, { email: user.email, phone, purpose });
-      return res.status(400).json({ message: "Invalid or expired OTP." });
+      logSecurityEvent("otp_login_failed", req, { phone: user.phone, purpose: MOBILE_LOGIN_PURPOSE });
+      await LoginAttempt.recordLoginAttempt(req, {
+        email: user.email,
+        phone: user.phone,
+        success: false,
+        reason: "invalid_or_expired_otp",
+      });
+      return res.status(401).json({ message: "Invalid or expired OTP." });
     }
 
-    if (phone) {
-      await User.markPhoneVerified(user.id);
-    } else {
-      await User.markEmailVerified(user.id);
-    }
+    await User.markPhoneVerified(user.id);
 
     const updatedUser = await User.findUserById(user.id);
     const { accessToken } = await issueAuthSession(req, res, updatedUser, rememberDevice);
     await LoginAttempt.recordLoginAttempt(req, {
       email: updatedUser.email,
+      phone: updatedUser.phone,
       success: true,
-      reason: purpose,
+      reason: MOBILE_LOGIN_PURPOSE,
     });
 
     return res.json({ token: accessToken, user: User.toPublicUser(updatedUser) });
   } catch (error) {
-    console.error("Unable to verify login OTP:", error);
-    return res.status(500).json({ message: "Unable to verify OTP." });
-  }
-}
-
-async function verifyOtp(req, res) {
-  const { email, otp, purpose = "email_verification" } = req.body;
-
-  try {
-    const user = await User.findUserByEmail(email);
-
-    if (!user) {
-      return res.status(400).json({ message: "Invalid or expired OTP." });
-    }
-
-    const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose });
-
-    if (!tokenRow || Number(tokenRow.user_id) !== Number(user.id)) {
-      logSecurityEvent("otp_failed", req, { email, purpose });
-      return res.status(400).json({ message: "Invalid or expired OTP." });
-    }
-
-    if (purpose === "email_verification") {
-      await User.markEmailVerified(user.id);
-    }
-
-    const updatedUser = await User.findUserById(user.id);
-    const { accessToken } = await issueAuthSession(req, res, updatedUser, false);
-
-    return res.json({ token: accessToken, user: User.toPublicUser(updatedUser), verified: true });
-  } catch (error) {
-    console.error("Unable to verify OTP:", error);
-    return res.status(500).json({ message: "Unable to verify OTP." });
+    logAuthError("Unable to verify mobile login OTP.", error, { phone });
+    return res.status(authErrorStatus(error)).json({
+      message: error?.status === 403 ? error.message : "Unable to verify OTP. Please try again.",
+    });
   }
 }
 
 async function requestTwoFactorOtp(req, res) {
-  const user = await User.findUserById(req.user.id);
+  try {
+    const user = await User.findUserById(req.user.id);
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found." });
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    await sendMobileLoginOtp(user);
+    return res.json({ message: "Two-factor OTP sent." });
+  } catch (error) {
+    logAuthError("Unable to request two-factor OTP.", error, { userId: req.user?.id });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to send OTP." });
   }
-
-  await sendOtp(user, "two_factor");
-  return res.json({ message: "Two-factor OTP sent." });
 }
 
 async function enableTwoFactor(req, res) {
   const { otp } = req.body;
-  const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose: "two_factor" });
 
-  if (!tokenRow || Number(tokenRow.user_id) !== Number(req.user.id)) {
-    return res.status(400).json({ message: "Invalid or expired OTP." });
+  try {
+    const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose: MOBILE_LOGIN_PURPOSE });
+
+    if (!tokenRow || Number(tokenRow.user_id) !== Number(req.user.id)) {
+      return res.status(401).json({ message: "Invalid or expired OTP." });
+    }
+
+    const user = await User.setTwoFactorEnabled(req.user.id, true);
+    return res.json({ user: User.toPublicUser(user), message: "Two-factor authentication enabled." });
+  } catch (error) {
+    logAuthError("Unable to enable two-factor authentication.", error, { userId: req.user?.id });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to enable two-factor authentication." });
   }
-
-  const user = await User.setTwoFactorEnabled(req.user.id, true);
-  return res.json({ user: User.toPublicUser(user), message: "Two-factor authentication enabled." });
 }
 
 async function disableTwoFactor(req, res) {
-  const user = await User.setTwoFactorEnabled(req.user.id, false);
-  return res.json({ user: User.toPublicUser(user), message: "Two-factor authentication disabled." });
-}
-
-async function forgotPassword(req, res) {
-  const { email } = req.body;
-
   try {
-    const user = await User.findUserByEmail(email);
-
-    if (user) {
-      const resetToken = generateSecureToken();
-      const expiresAt = new Date(Date.now() + RESET_EXPIRY_MINUTES * 60 * 1000);
-
-      await SecurityToken.clearPurpose(user.id, "password_reset");
-      await SecurityToken.createToken({
-        userId: user.id,
-        purpose: "password_reset",
-        token: resetToken,
-        expiresAt,
-      });
-      await Notification.sendPasswordResetEmail({ user, resetToken });
-    }
-
-    return res.json({
-      message: "If that email exists, a password reset link has been sent.",
-    });
+    const user = await User.setTwoFactorEnabled(req.user.id, false);
+    return res.json({ user: User.toPublicUser(user), message: "Two-factor authentication disabled." });
   } catch (error) {
-    console.error("Unable to request password reset:", error);
-    return res.status(500).json({ message: "Unable to request password reset." });
-  }
-}
-
-async function resetPassword(req, res) {
-  const { token, password } = req.body;
-
-  try {
-    const tokenRow = await SecurityToken.consumeToken({ token, purpose: "password_reset" });
-
-    if (!tokenRow) {
-      return res.status(400).json({ message: "Invalid or expired reset token." });
-    }
-
-    const passwordHash = await bcrypt.hash(password, 12);
-    await User.updatePassword(tokenRow.user_id, passwordHash);
-
-    return res.json({ message: "Password reset successful." });
-  } catch (error) {
-    console.error("Unable to reset password:", error);
-    return res.status(500).json({ message: "Unable to reset password." });
+    logAuthError("Unable to disable two-factor authentication.", error, { userId: req.user?.id });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to disable two-factor authentication." });
   }
 }
 
 async function me(req, res) {
-  const user = await User.findUserById(req.user.id);
+  try {
+    const user = await User.findUserById(req.user.id);
 
-  if (!user) {
-    return res.status(404).json({ message: "User not found." });
+    if (!user) {
+      return res.status(404).json({ message: "User not found." });
+    }
+
+    return res.json({ user: User.toPublicUser(user) });
+  } catch (error) {
+    logAuthError("Unable to load user profile.", error, { userId: req.user?.id });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to load user profile." });
   }
-
-  return res.json({ user: User.toPublicUser(user) });
 }
 
 async function refresh(req, res) {
-  if (!process.env.JWT_SECRET) {
-    return res.status(500).json({ message: "JWT secret is not configured." });
-  }
-
   const currentRefreshToken = req.cookies?.[REFRESH_TOKEN_COOKIE] || req.body.refreshToken;
 
   try {
+    ensureJwtConfigured();
+
+    if (!currentRefreshToken) {
+      clearAuthCookies(res);
+      return res.status(401).json({ message: "Refresh session expired." });
+    }
+
     const session = await UserSession.findActiveSessionByRefreshToken(currentRefreshToken);
 
     if (!session) {
@@ -370,41 +283,58 @@ async function refresh(req, res) {
 
     return res.json({ token: accessToken, user: User.toPublicUser(user) });
   } catch (error) {
-    console.error("Unable to refresh token:", error);
-    return res.status(500).json({ message: "Unable to refresh session." });
+    logAuthError("Unable to refresh token.", error);
+    clearAuthCookies(res);
+    return res.status(authErrorStatus(error)).json({
+      message: error?.status === 403 ? error.message : "Unable to refresh session.",
+    });
   }
 }
 
 async function sessions(req, res) {
-  const rows = await UserSession.listUserSessions(req.user.id);
-  return res.json({ sessions: rows });
+  try {
+    const rows = await UserSession.listUserSessions(req.user.id);
+    return res.json({ sessions: rows });
+  } catch (error) {
+    logAuthError("Unable to list user sessions.", error, { userId: req.user?.id });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to list sessions." });
+  }
 }
 
 async function revokeSession(req, res) {
-  await UserSession.revokeSession(req.params.id, req.user.id);
-  return res.json({ message: "Session revoked." });
+  try {
+    await UserSession.revokeSession(req.params.id, req.user.id);
+    return res.json({ message: "Session revoked." });
+  } catch (error) {
+    logAuthError("Unable to revoke user session.", error, {
+      userId: req.user?.id,
+      sessionId: req.params.id,
+    });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to revoke session." });
+  }
 }
 
 async function logout(req, res) {
-  await UserSession.revokeByRefreshToken(req.cookies?.[REFRESH_TOKEN_COOKIE] || req.body.refreshToken);
-  clearAuthCookies(res);
-  return res.json({ message: "Logged out." });
+  try {
+    await UserSession.revokeByRefreshToken(req.cookies?.[REFRESH_TOKEN_COOKIE] || req.body.refreshToken);
+    clearAuthCookies(res);
+    return res.json({ message: "Logged out." });
+  } catch (error) {
+    logAuthError("Unable to logout user.", error);
+    clearAuthCookies(res);
+    return res.status(authErrorStatus(error)).json({ message: "Unable to logout." });
+  }
 }
 
 module.exports = {
   disableTwoFactor,
   enableTwoFactor,
-  forgotPassword,
-  login,
   logout,
   me,
   refresh,
-  register,
   requestOtpLogin,
   requestTwoFactorOtp,
-  resetPassword,
   revokeSession,
   sessions,
   verifyOtpLogin,
-  verifyOtp,
 };

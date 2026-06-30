@@ -73,7 +73,7 @@ WHERE image_url IS NOT NULL
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
+  email VARCHAR(255) UNIQUE,
   phone VARCHAR(20),
   role VARCHAR(30) NOT NULL DEFAULT 'user',
   password_hash TEXT,
@@ -90,6 +90,9 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS email VARCHAR(255);
 
 ALTER TABLE users
+ALTER COLUMN email DROP NOT NULL;
+
+ALTER TABLE users
 ADD COLUMN IF NOT EXISTS phone VARCHAR(20);
 
 ALTER TABLE users
@@ -102,10 +105,28 @@ ALTER TABLE users
 ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE users
+ADD COLUMN IF NOT EXISTS phone_verified BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE users
 ADD COLUMN IF NOT EXISTS two_factor_enabled BOOLEAN NOT NULL DEFAULT false;
 
 ALTER TABLE users
+ADD COLUMN IF NOT EXISTS referral_code VARCHAR(20);
+
+ALTER TABLE users
 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE users
+SET referral_code = UPPER(SUBSTRING(MD5(id::text || COALESCE(email, '') || COALESCE(phone, '') || created_at::text), 1, 8))
+WHERE referral_code IS NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_phone_unique_idx
+ON users (phone)
+WHERE phone IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS users_referral_code_unique_idx
+ON users (referral_code)
+WHERE referral_code IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS orders (
   id SERIAL PRIMARY KEY,
@@ -277,6 +298,7 @@ WHERE used_at IS NULL;
 CREATE TABLE IF NOT EXISTS login_attempts (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255),
+  phone VARCHAR(30),
   ip_address VARCHAR(100),
   user_agent TEXT,
   success BOOLEAN NOT NULL DEFAULT false,
@@ -289,6 +311,9 @@ ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 
 ALTER TABLE login_attempts
 ADD COLUMN IF NOT EXISTS email VARCHAR(255);
+
+ALTER TABLE login_attempts
+ADD COLUMN IF NOT EXISTS phone VARCHAR(30);
 
 ALTER TABLE login_attempts
 ADD COLUMN IF NOT EXISTS ip_address VARCHAR(100);
@@ -307,6 +332,9 @@ ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS login_attempts_email_created_idx
 ON login_attempts (email, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS login_attempts_phone_created_idx
+ON login_attempts (phone, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS login_attempts_ip_created_idx
 ON login_attempts (ip_address, created_at DESC);

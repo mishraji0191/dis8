@@ -6,7 +6,8 @@ const PROVIDERS = {
 };
 
 function getConfiguredProvider() {
-  return (process.env.OTP_PROVIDER || PROVIDERS.LOG).toLowerCase();
+  const fallback = process.env.NODE_ENV === "production" ? PROVIDERS.MSG91 : PROVIDERS.LOG;
+  return (process.env.OTP_PROVIDER || fallback).toLowerCase();
 }
 
 function buildOtpMessage(otp, purpose) {
@@ -23,7 +24,9 @@ async function postJson(url, headers, body) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`OTP provider returned ${response.status}: ${text}`);
+    const error = new Error(`OTP provider returned ${response.status}: ${text}`);
+    error.status = response.status === 429 ? 429 : 403;
+    throw error;
   }
 
   return response.json().catch(() => ({}));
@@ -34,15 +37,19 @@ async function sendViaMsg91({ phone, otp, purpose }) {
   const templateId = process.env.MSG91_TEMPLATE_ID;
 
   if (!authKey || !templateId) {
-    throw new Error("MSG91_AUTH_KEY and MSG91_TEMPLATE_ID are required.");
+    const error = new Error("MSG91_AUTH_KEY and MSG91_TEMPLATE_ID are required.");
+    error.status = 403;
+    throw error;
   }
+
+  const mobile = String(phone || "").replace(/\D/g, "");
 
   return postJson(
     "https://control.msg91.com/api/v5/otp",
     { authkey: authKey },
     {
       template_id: templateId,
-      mobile: phone,
+      mobile,
       otp,
       message: buildOtpMessage(otp, purpose),
     }
@@ -55,7 +62,9 @@ async function sendViaTwilio({ phone, otp, purpose }) {
   const from = process.env.TWILIO_FROM_NUMBER;
 
   if (!accountSid || !authToken || !from) {
-    throw new Error("TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER are required.");
+    const error = new Error("TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER are required.");
+    error.status = 403;
+    throw error;
   }
 
   const params = new URLSearchParams({
@@ -78,7 +87,9 @@ async function sendViaTwilio({ phone, otp, purpose }) {
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`Twilio returned ${response.status}: ${text}`);
+    const error = new Error(`Twilio returned ${response.status}: ${text}`);
+    error.status = response.status === 429 ? 429 : 403;
+    throw error;
   }
 
   return response.json();
@@ -88,7 +99,9 @@ async function sendViaFast2Sms({ phone, otp, purpose }) {
   const apiKey = process.env.FAST2SMS_API_KEY;
 
   if (!apiKey) {
-    throw new Error("FAST2SMS_API_KEY is required.");
+    const error = new Error("FAST2SMS_API_KEY is required.");
+    error.status = 403;
+    throw error;
   }
 
   return postJson(
@@ -105,7 +118,9 @@ async function sendViaFast2Sms({ phone, otp, purpose }) {
 
 async function sendOtpSms({ phone, otp, purpose }) {
   if (!phone) {
-    return { skipped: true, reason: "phone_missing" };
+    const error = new Error("Phone number is required for OTP.");
+    error.status = 400;
+    throw error;
   }
 
   const provider = getConfiguredProvider();

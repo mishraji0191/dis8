@@ -2,12 +2,19 @@ const express = require("express");
 
 const { loginAdmin, getAdminProfile, logoutAdmin } = require("../controllers/adminAuthController");
 const companySettingsController = require("../controllers/adminCompanySettingsController");
+const categoryController = require("../controllers/categoryController");
+const heroSliderController = require("../controllers/heroSliderController");
 const productController = require("../controllers/adminProductController");
 const orderController = require("../controllers/adminOrderController");
 const userController = require("../controllers/adminUserController");
 const adminAuth = require("../middleware/adminAuth");
 const { authLimiter } = require("../middleware/security");
-const { uploadProductImage, uploadSettingsImage } = require("../middleware/upload");
+const {
+  uploadCategoryImage,
+  uploadHeroSliderImage,
+  uploadProductImage,
+  uploadSettingsImage,
+} = require("../middleware/upload");
 const { idParamRule, loginRules, validateRequest } = require("../middleware/validators");
 
 const router = express.Router();
@@ -15,6 +22,42 @@ const router = express.Router();
 router.post("/login", authLimiter, loginRules, validateRequest, loginAdmin);
 router.post("/logout", logoutAdmin);
 router.get("/me", adminAuth, getAdminProfile);
+
+router.get("/hero-slider", adminAuth, heroSliderController.listAdminHeroSliders);
+router.post(
+  "/hero-slider",
+  adminAuth,
+  uploadHeroSliderImage.single("image"),
+  heroSliderController.createHeroSlider
+);
+router.put(
+  "/hero-slider/:id",
+  adminAuth,
+  uploadHeroSliderImage.single("image"),
+  heroSliderController.updateHeroSlider
+);
+router.delete("/hero-slider/:id", adminAuth, heroSliderController.deleteHeroSlider);
+router.patch(
+  "/hero-slider/:id/status",
+  adminAuth,
+  heroSliderController.updateHeroSliderStatus
+);
+router.patch("/hero-slider/reorder", adminAuth, heroSliderController.reorderHeroSliders);
+
+router.get("/categories", adminAuth, categoryController.listAdminCategories);
+router.post(
+  "/categories",
+  adminAuth,
+  uploadCategoryImage.single("image"),
+  categoryController.createCategory
+);
+router.put(
+  "/categories/:id",
+  adminAuth,
+  uploadCategoryImage.single("image"),
+  categoryController.updateCategory
+);
+router.delete("/categories/:id", adminAuth, categoryController.deleteCategory);
 
 router.get("/company-details", companySettingsController.getCompanyDetails);
 router.put(

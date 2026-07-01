@@ -3,10 +3,16 @@ const path = require("path");
 const multer = require("multer");
 
 const productsDirectory = path.join(__dirname, "..", "uploads", "products");
+const categoriesDirectory = path.join(__dirname, "..", "uploads", "categories");
 const settingsDirectory = path.join(__dirname, "..", "uploads", "settings");
 const paymentsDirectory = path.join(__dirname, "..", "uploads", "payments");
 
-for (const directory of [productsDirectory, settingsDirectory, paymentsDirectory]) {
+for (const directory of [
+  productsDirectory,
+  categoriesDirectory,
+  settingsDirectory,
+  paymentsDirectory,
+]) {
   fs.mkdirSync(directory, { recursive: true });
 }
 
@@ -47,8 +53,24 @@ const uploadProductImage = multer({
   },
 });
 
+const uploadHeroSliderImage = multer({
+  storage: productStorage,
+  fileFilter,
+  limits: {
+    fileSize: 10 * 1024 * 1024,
+  },
+});
+
 const uploadSettingsImage = multer({
   storage: createStorage(settingsDirectory),
+  fileFilter,
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+  },
+});
+
+const uploadCategoryImage = multer({
+  storage: createStorage(categoriesDirectory),
   fileFilter,
   limits: {
     fileSize: 5 * 1024 * 1024,
@@ -64,6 +86,8 @@ const uploadPaymentScreenshot = multer({
 });
 
 module.exports = {
+  uploadCategoryImage,
+  uploadHeroSliderImage,
   uploadPaymentScreenshot,
   uploadProductImage,
   uploadSettingsImage,

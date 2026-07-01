@@ -47,13 +47,53 @@ function getProductPayload(body, images) {
     description: body.description?.trim() || "",
     price: Number(body.price) || 0,
     category: body.category?.trim() || "",
+    category_id: body.category_id || body.categoryId || null,
+    subcategory_id: body.subcategory_id || body.subcategoryId || null,
     images,
     image_url: images[0] || "",
     stock: Number.parseInt(body.stock, 10) || 0,
   };
 }
 
-function validateProduct(payload) {
+async function applyCategorySelection(payload) {
+  if (!payload.category_id) {
+    return "";
+  }
+
+  const categoryResult = await pool.query(
+    "SELECT id, name, parent_id FROM categories WHERE id = $1",
+    [payload.category_id]
+  );
+
+  if (categoryResult.rowCount === 0 || categoryResult.rows[0].parent_id) {
+    return "Select a valid parent category.";
+  }
+
+  payload.category = categoryResult.rows[0].name;
+  payload.category_id = Number(payload.category_id);
+
+  if (!payload.subcategory_id) {
+    payload.subcategory_id = null;
+    return "";
+  }
+
+  const subcategoryResult = await pool.query(
+    "SELECT id, parent_id FROM categories WHERE id = $1",
+    [payload.subcategory_id]
+  );
+
+  if (
+    subcategoryResult.rowCount === 0 ||
+    String(subcategoryResult.rows[0].parent_id) !== String(payload.category_id)
+  ) {
+    return "Select a valid subcategory for this category.";
+  }
+
+  payload.subcategory_id = Number(payload.subcategory_id);
+  return "";
+}
+
+async function validateProduct(payload) {
   if (!payload.name) {
     return "Product name is required.";
   }
@@ -66,17 +106,26 @@ function validateProduct(payload) {
     return "Stock cannot be negative.";
   }
 
-  return "";
+  return applyCategorySelection(payload);
 }
+
+const productSelect = `
+  SELECT p.id, p.name, p.description, p.price, p.category,
+         p.category_id, category.name AS category_name, category.slug AS category_slug,
+         p.subcategory_id, subcategory.name AS subcategory_name,
+         subcategory.slug AS subcategory_slug,
+         p.image_url, COALESCE(p.images, ARRAY[]::text[]) AS images,
+         p.stock, p.created_at
+  FROM products p
+  LEFT JOIN categories category ON category.id = p.category_id
+  LEFT JOIN categories subcategory ON subcategory.id = p.subcategory_id
+`;
 
 async function listProducts(req, res) {
   try {
     const result = await pool.query(
-      `SELECT id, name, description, price, category, image_url,
-              COALESCE(images, ARRAY[]::text[]) AS images,
-              stock, created_at
-       FROM products
-       ORDER BY created_at DESC, id DESC`
+      `${productSelect}
+       ORDER BY p.created_at DESC, p.id DESC`
     );
 
     return res.json(result.rows);
@@ -90,7 +139,7 @@ async function createProduct(req, res) {
   const uploadedImages = getUploadedProductImages(req);
   const images = normalizeImages({ body: req.body, uploadedImages });
   const payload = getProductPayload(req.body, images);
-  const validationError = validateProduct(payload);
+  const validationError = await validateProduct(payload);
 
   if (validationError) {
     return res.status(400).json({ message: validationError });
@@ -98,16 +147,31 @@ async function createProduct(req, res) {
 
   try {
     const result = await pool.query(
-      `INSERT INTO products (name, description, price, category, image_url, images, stock)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
-       RETURNING id, name, description, price, category, image_url,
-                 COALESCE(images, ARRAY[]::text[]) AS images,
-                 stock, created_at`,
+      `WITH inserted AS (
+         INSERT INTO products (
+           name, description, price, category, category_id, subcategory_id,
+           image_url, images, stock
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING *
+       )
+       SELECT inserted.id, inserted.name, inserted.description, inserted.price,
+              inserted.category, inserted.category_id,
+              category.name AS category_name, category.slug AS category_slug,
+              inserted.subcategory_id, subcategory.name AS subcategory_name,
+              subcategory.slug AS subcategory_slug,
+              inserted.image_url, COALESCE(inserted.images, ARRAY[]::text[]) AS images,
+              inserted.stock, inserted.created_at
+       FROM inserted
+       LEFT JOIN categories category ON category.id = inserted.category_id
+       LEFT JOIN categories subcategory ON subcategory.id = inserted.subcategory_id`,
       [
         payload.name,
         payload.description,
         payload.price,
         payload.category,
+        payload.category_id,
+        payload.subcategory_id,
         payload.image_url,
         payload.images,
         payload.stock,
@@ -145,30 +209,44 @@ async function updateProduct(req, res) {
       existingImages,
     });
     const payload = getProductPayload(req.body, images);
-    const validationError = validateProduct(payload);
+    const validationError = await validateProduct(payload);
 
     if (validationError) {
       return res.status(400).json({ message: validationError });
     }
 
     const result = await pool.query(
-      `UPDATE products
-       SET name = $1,
-           description = $2,
-           price = $3,
-           category = $4,
-           image_url = $5,
-           images = $6,
-           stock = $7
-       WHERE id = $8
-       RETURNING id, name, description, price, category, image_url,
-                 COALESCE(images, ARRAY[]::text[]) AS images,
-                 stock, created_at`,
+      `WITH updated AS (
+         UPDATE products
+         SET name = $1,
+             description = $2,
+             price = $3,
+             category = $4,
+             category_id = $5,
+             subcategory_id = $6,
+             image_url = $7,
+             images = $8,
+             stock = $9
+         WHERE id = $10
+         RETURNING *
+       )
+       SELECT updated.id, updated.name, updated.description, updated.price,
+              updated.category, updated.category_id,
+              category.name AS category_name, category.slug AS category_slug,
+              updated.subcategory_id, subcategory.name AS subcategory_name,
+              subcategory.slug AS subcategory_slug,
+              updated.image_url, COALESCE(updated.images, ARRAY[]::text[]) AS images,
+              updated.stock, updated.created_at
+       FROM updated
+       LEFT JOIN categories category ON category.id = updated.category_id
+       LEFT JOIN categories subcategory ON subcategory.id = updated.subcategory_id`,
       [
         payload.name,
         payload.description,
         payload.price,
         payload.category,
+        payload.category_id,
+        payload.subcategory_id,
         payload.image_url,
         payload.images,
         payload.stock,

@@ -9,9 +9,11 @@ const orderRoutes = require("./routes/orderRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const privateRoutes = require("./routes/privateRoutes");
 const productRoutes = require("./routes/productRoutes");
+const categoryRoutes = require("./routes/categoryRoutes");
 const cartRoutes = require("./routes/cartRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const shippingRoutes = require("./routes/shippingRoutes");
+const heroSliderRoutes = require("./routes/heroSliderRoutes");
 const {
   applySecurityMiddleware,
   cookieCsrfGuard,
@@ -36,6 +38,8 @@ app.get("/api/security/csrf-token", issueCsrfToken);
 app.use(cookieCsrfGuard);
 
 app.use("/api/products", productRoutes);
+app.use("/api/categories", categoryRoutes);
+app.use("/api/hero-slider", heroSliderRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/orders", orderRoutes);

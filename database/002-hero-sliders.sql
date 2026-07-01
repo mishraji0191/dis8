@@ -1,0 +1,50 @@
+CREATE TABLE IF NOT EXISTS hero_sliders (
+  id BIGSERIAL PRIMARY KEY,
+  title VARCHAR(180) NOT NULL,
+  subtitle TEXT,
+  image_url TEXT NOT NULL,
+  button_text VARCHAR(80) NOT NULL DEFAULT 'Shop Now',
+  button_link TEXT NOT NULL,
+  collection VARCHAR(80) NOT NULL,
+  text_position VARCHAR(20) NOT NULL DEFAULT 'left',
+  display_order INT NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS title VARCHAR(180);
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS subtitle TEXT;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS button_text VARCHAR(80) NOT NULL DEFAULT 'Shop Now';
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS button_link TEXT;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS collection VARCHAR(80);
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS text_position VARCHAR(20) NOT NULL DEFAULT 'left';
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS display_order INT NOT NULL DEFAULT 0;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS hero_sliders_active_order_idx
+ON hero_sliders (is_active, display_order ASC, id ASC);

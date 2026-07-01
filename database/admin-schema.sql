@@ -37,6 +37,105 @@ CREATE TABLE IF NOT EXISTS products (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS categories (
+  id BIGSERIAL PRIMARY KEY,
+  name VARCHAR(120) NOT NULL,
+  slug VARCHAR(140) NOT NULL UNIQUE,
+  parent_id BIGINT REFERENCES categories(id) ON DELETE RESTRICT,
+  image_url TEXT,
+  display_order INT NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS name VARCHAR(120);
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS slug VARCHAR(140);
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS parent_id BIGINT;
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS display_order INT NOT NULL DEFAULT 0;
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE categories
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE UNIQUE INDEX IF NOT EXISTS categories_slug_unique_idx ON categories (slug);
+CREATE INDEX IF NOT EXISTS categories_parent_order_idx ON categories (parent_id, display_order, name);
+
+INSERT INTO categories (name, slug, display_order, is_active)
+VALUES
+  ('Men', 'men', 1, true),
+  ('Women', 'women', 2, true),
+  ('Compression Wear', 'compression-wear', 3, true),
+  ('Cricket', 'cricket', 4, true),
+  ('Kids', 'kids', 5, true),
+  ('Swimwear', 'swimwear', 6, true)
+ON CONFLICT (slug) DO UPDATE
+SET name = EXCLUDED.name,
+    display_order = EXCLUDED.display_order,
+    is_active = EXCLUDED.is_active,
+    updated_at = CURRENT_TIMESTAMP;
+
+WITH seed_subcategories(parent_slug, name, slug, display_order) AS (
+  VALUES
+    ('men', 'Tracksuits', 'men-tracksuits', 1),
+    ('men', 'T-Shirts', 'men-t-shirts', 2),
+    ('men', 'Sandos', 'men-sandos', 3),
+    ('men', 'Lowers', 'men-lowers', 4),
+    ('men', 'Shorts', 'men-shorts', 5),
+    ('men', 'Hoodies', 'men-hoodies', 6),
+    ('men', 'Basketball Wear', 'men-basketball-wear', 7),
+    ('men', 'Practice Wear', 'men-practice-wear', 8),
+    ('men', 'Y-Back', 'men-y-back', 9),
+    ('men', 'Round Neck T-Shirts', 'men-round-neck-t-shirts', 10),
+    ('women', 'Hot Suit', 'women-hot-suit', 1),
+    ('women', 'Tights', 'women-tights', 2),
+    ('women', 'Butter Collection', 'women-butter-collection', 3),
+    ('women', 'Training Wear', 'women-training-wear', 4),
+    ('compression-wear', 'Compression Tops', 'compression-wear-compression-tops', 1),
+    ('compression-wear', 'Compression Tights', 'compression-wear-compression-tights', 2),
+    ('cricket', 'Cricket Whites', 'cricket-cricket-whites', 1),
+    ('kids', 'Active Set', 'kids-active-set', 1),
+    ('kids', 'Slim Fit Set', 'kids-slim-fit-set', 2),
+    ('kids', 'Training Suit', 'kids-training-suit', 3),
+    ('kids', 'Shorts Set', 'kids-shorts-set', 4),
+    ('kids', 'Stylo Set', 'kids-stylo-set', 5),
+    ('swimwear', 'Professional Swim', 'swimwear-professional-swim', 1),
+    ('swimwear', 'Swimming Costume', 'swimwear-swimming-costume', 2),
+    ('swimwear', 'Swimming Shorts', 'swimwear-swimming-shorts', 3),
+    ('swimwear', 'Swimming Trunks', 'swimwear-swimming-trunks', 4),
+    ('swimwear', 'Water Shorts', 'swimwear-water-shorts', 5),
+    ('swimwear', 'Life Jackets', 'swimwear-life-jackets', 6),
+    ('swimwear', 'Jammers', 'swimwear-jammers', 7),
+    ('swimwear', 'Swim Dress', 'swimwear-swim-dress', 8),
+    ('swimwear', 'Swim Top & Bottom', 'swimwear-swim-top-bottom', 9),
+    ('swimwear', 'Kids Swimwear', 'swimwear-kids-swimwear', 10)
+)
+INSERT INTO categories (name, slug, parent_id, display_order, is_active)
+SELECT seed.name, seed.slug, parent.id, seed.display_order, true
+FROM seed_subcategories seed
+JOIN categories parent ON parent.slug = seed.parent_slug
+ON CONFLICT (slug) DO UPDATE
+SET name = EXCLUDED.name,
+    parent_id = EXCLUDED.parent_id,
+    display_order = EXCLUDED.display_order,
+    is_active = EXCLUDED.is_active,
+    updated_at = CURRENT_TIMESTAMP;
+
 ALTER TABLE products
 ADD COLUMN IF NOT EXISTS id BIGSERIAL;
 
@@ -51,6 +150,12 @@ ADD COLUMN IF NOT EXISTS price NUMERIC NOT NULL DEFAULT 0;
 
 ALTER TABLE products
 ADD COLUMN IF NOT EXISTS category VARCHAR(100);
+
+ALTER TABLE products
+ADD COLUMN IF NOT EXISTS category_id BIGINT REFERENCES categories(id) ON DELETE RESTRICT;
+
+ALTER TABLE products
+ADD COLUMN IF NOT EXISTS subcategory_id BIGINT REFERENCES categories(id) ON DELETE RESTRICT;
 
 ALTER TABLE products
 ADD COLUMN IF NOT EXISTS image_url TEXT;
@@ -69,6 +174,21 @@ SET images = ARRAY[image_url]
 WHERE image_url IS NOT NULL
   AND image_url <> ''
   AND (images IS NULL OR cardinality(images) = 0);
+
+UPDATE products product
+SET category_id = matched.category_id,
+    subcategory_id = matched.subcategory_id
+FROM (
+  SELECT
+    p.id AS product_id,
+    COALESCE(parent.id, category.id) AS category_id,
+    CASE WHEN category.parent_id IS NULL THEN NULL ELSE category.id END AS subcategory_id
+  FROM products p
+  JOIN categories category ON LOWER(category.name) = LOWER(p.category)
+  LEFT JOIN categories parent ON parent.id = category.parent_id
+  WHERE p.category_id IS NULL
+) matched
+WHERE product.id = matched.product_id;
 
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
@@ -385,3 +505,54 @@ INSERT INTO company_settings
 VALUES
   (1, 'DIS8 INTERNATIONAL', 'IDFC FIRST BANK', '82611202131', 'IDFB0020158', 'NOIDA')
 ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS hero_sliders (
+  id BIGSERIAL PRIMARY KEY,
+  title VARCHAR(180) NOT NULL,
+  subtitle TEXT,
+  image_url TEXT NOT NULL,
+  button_text VARCHAR(80) NOT NULL DEFAULT 'Shop Now',
+  button_link TEXT NOT NULL,
+  collection VARCHAR(80) NOT NULL,
+  text_position VARCHAR(20) NOT NULL DEFAULT 'left',
+  display_order INT NOT NULL DEFAULT 0,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS title VARCHAR(180);
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS subtitle TEXT;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS image_url TEXT;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS button_text VARCHAR(80) NOT NULL DEFAULT 'Shop Now';
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS button_link TEXT;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS collection VARCHAR(80);
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS text_position VARCHAR(20) NOT NULL DEFAULT 'left';
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS display_order INT NOT NULL DEFAULT 0;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+ALTER TABLE hero_sliders
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS hero_sliders_active_order_idx
+ON hero_sliders (is_active, display_order ASC, id ASC);

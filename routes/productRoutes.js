@@ -5,11 +5,18 @@ const pool = require("../config/db");
 router.get("/", async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, description, price, category, image_url,
-              COALESCE(images, ARRAY[]::text[]) AS images,
-              stock, created_at
-       FROM products
-       ORDER BY id DESC`
+      `SELECT p.id, p.name, p.description, p.price, p.category,
+              p.category_id, category.name AS category_name, category.slug AS category_slug,
+              p.subcategory_id, subcategory.name AS subcategory_name,
+              subcategory.slug AS subcategory_slug,
+              p.image_url, COALESCE(p.images, ARRAY[]::text[]) AS images,
+              p.stock, p.created_at
+       FROM products p
+       LEFT JOIN categories category ON category.id = p.category_id
+       LEFT JOIN categories subcategory ON subcategory.id = p.subcategory_id
+       WHERE COALESCE(category.is_active, true) = true
+         AND COALESCE(subcategory.is_active, true) = true
+       ORDER BY p.id DESC`
     );
 
     res.json(

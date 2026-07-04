@@ -2,7 +2,7 @@ const CompanySettings = require("../models/companySettingsModel");
 
 function uploadedPath(files, fieldName, folder = "settings") {
   const file = files?.[fieldName]?.[0];
-  return file ? `/uploads/${folder}/${file.filename}` : "";
+  return file?.path || "";
 }
 
 async function getCompanyDetails(req, res) {

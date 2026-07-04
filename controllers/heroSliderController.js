@@ -57,8 +57,8 @@ function normalizeText(value, fallback = "") {
 }
 
 function getImageUrl(req) {
-  if (req.file?.filename) {
-    return `/uploads/products/${req.file.filename}`;
+  if (req.file?.path) {
+    return req.file.path;
   }
 
   return normalizeText(req.body.image_url || req.body.imageUrl);
@@ -188,6 +188,11 @@ async function createHeroSlider(req, res) {
 
     return res.status(201).json(result.rows[0]);
   } catch (error) {
+    console.error("Database insert failed:", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+    });
     return res.status(500).json({ message: getErrorMessage("Unable to create hero slider", error) });
   }
 }
@@ -244,6 +249,11 @@ async function updateHeroSlider(req, res) {
 
     return res.json(result.rows[0]);
   } catch (error) {
+    console.error("Database update failed:", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+    });
     return res.status(500).json({ message: getErrorMessage("Unable to update hero slider", error) });
   }
 }

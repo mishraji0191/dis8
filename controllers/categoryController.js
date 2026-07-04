@@ -106,7 +106,7 @@ async function listAdminCategories(req, res) {
 }
 
 function getUploadedCategoryImage(req) {
-  return req.file ? `/uploads/categories/${req.file.filename}` : "";
+  return req.file?.path || "";
 }
 
 function getCategoryPayload(body, uploadedImage = "", existingCategory = null) {

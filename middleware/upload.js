@@ -1,43 +1,40 @@
-const fs = require("fs");
-const path = require("path");
 const multer = require("multer");
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const cloudinary = require("../config/cloudinary");
 
-const productsDirectory = path.join(__dirname, "..", "uploads", "products");
-const categoriesDirectory = path.join(__dirname, "..", "uploads", "categories");
-const settingsDirectory = path.join(__dirname, "..", "uploads", "settings");
-const paymentsDirectory = path.join(__dirname, "..", "uploads", "payments");
+const allowedImageFormats = [
+  "avif",
+  "gif",
+  "jpeg",
+  "jpg",
+  "png",
+  "webp",
+];
 
-for (const directory of [
-  productsDirectory,
-  categoriesDirectory,
-  settingsDirectory,
-  paymentsDirectory,
-]) {
-  fs.mkdirSync(directory, { recursive: true });
-}
+const imageMimeTypes = new Set([
+  "image/avif",
+  "image/gif",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/webp",
+]);
 
-function createStorage(uploadDirectory) {
-  return multer.diskStorage({
-    destination: uploadDirectory,
-    filename: (req, file, cb) => {
-      const extension = path.extname(file.originalname).toLowerCase();
-      const safeName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
-      cb(null, safeName);
+function createCloudinaryStorage(folder) {
+  return new CloudinaryStorage({
+    cloudinary,
+    params: async (req, file) => {
+      return {
+        folder,
+        resource_type: "image",
+        allowed_formats: allowedImageFormats,
+      };
     },
   });
 }
 
-const productStorage = multer.diskStorage({
-  destination: productsDirectory,
-  filename: (req, file, cb) => {
-    const extension = path.extname(file.originalname).toLowerCase();
-    const safeName = `${Date.now()}-${Math.round(Math.random() * 1e9)}${extension}`;
-    cb(null, safeName);
-  },
-});
-
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype.startsWith("image/")) {
+  if (file.mimetype.startsWith("image/") && imageMimeTypes.has(file.mimetype)) {
     cb(null, true);
     return;
   }
@@ -45,45 +42,76 @@ const fileFilter = (req, file, cb) => {
   cb(new Error("Only image files are allowed."));
 };
 
-const uploadProductImage = multer({
-  storage: productStorage,
-  fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-  },
-});
+function handleUploadError(error, req, res, next) {
+  if (!error) {
+    next();
+    return;
+  }
 
-const uploadHeroSliderImage = multer({
-  storage: productStorage,
-  fileFilter,
-  limits: {
-    fileSize: 10 * 1024 * 1024,
-  },
-});
+  console.error("Cloudinary upload failed:", {
+    message: error.message,
+    code: error.code,
+    field: error.field,
+  });
 
-const uploadSettingsImage = multer({
-  storage: createStorage(settingsDirectory),
-  fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-  },
-});
+  const status = error instanceof multer.MulterError ? 400 : 500;
+  return res.status(status).json({
+    message: error.message || "Cloudinary upload failed.",
+  });
+}
 
-const uploadCategoryImage = multer({
-  storage: createStorage(categoriesDirectory),
-  fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-  },
-});
+function withUploadErrorHandling(upload) {
+  return {
+    single(fieldName) {
+      const middleware = upload.single(fieldName);
+      return (req, res, next) => middleware(req, res, (error) => {
+        handleUploadError(error, req, res, next);
+      });
+    },
+    array(fieldName, maxCount) {
+      const middleware = upload.array(fieldName, maxCount);
+      return (req, res, next) => middleware(req, res, (error) => {
+        handleUploadError(error, req, res, next);
+      });
+    },
+    fields(fields) {
+      const middleware = upload.fields(fields);
+      return (req, res, next) => middleware(req, res, (error) => {
+        handleUploadError(error, req, res, next);
+      });
+    },
+    any() {
+      const middleware = upload.any();
+      return (req, res, next) => middleware(req, res, (error) => {
+        handleUploadError(error, req, res, next);
+      });
+    },
+    none() {
+      const middleware = upload.none();
+      return (req, res, next) => middleware(req, res, (error) => {
+        handleUploadError(error, req, res, next);
+      });
+    },
+  };
+}
 
-const uploadPaymentScreenshot = multer({
-  storage: createStorage(paymentsDirectory),
-  fileFilter,
-  limits: {
-    fileSize: 5 * 1024 * 1024,
-  },
-});
+function createUpload(folder, fileSize) {
+  return withUploadErrorHandling(
+    multer({
+      storage: createCloudinaryStorage(folder),
+      fileFilter,
+      limits: {
+        fileSize,
+      },
+    })
+  );
+}
+
+const uploadProductImage = createUpload("DIS8/products", 5 * 1024 * 1024);
+const uploadHeroSliderImage = createUpload("DIS8/hero-slider", 10 * 1024 * 1024);
+const uploadCategoryImage = createUpload("DIS8/categories", 5 * 1024 * 1024);
+const uploadSettingsImage = createUpload("DIS8/settings", 5 * 1024 * 1024);
+const uploadPaymentScreenshot = createUpload("DIS8/payments", 5 * 1024 * 1024);
 
 module.exports = {
   uploadCategoryImage,

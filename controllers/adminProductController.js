@@ -17,13 +17,13 @@ function parseImageList(value) {
 
 function getUploadedProductImages(req) {
   if (Array.isArray(req.files)) {
-    return req.files.map((file) => `/uploads/products/${file.filename}`);
+    return req.files.map((file) => file.path).filter(Boolean);
   }
 
   return [
     ...(req.files?.images || []),
     ...(req.files?.image || []),
-  ].map((file) => `/uploads/products/${file.filename}`);
+  ].map((file) => file.path).filter(Boolean);
 }
 
 function normalizeImages({ body, uploadedImages, existingImages = [] }) {
@@ -180,8 +180,14 @@ async function createProduct(req, res) {
 
     return res.status(201).json(result.rows[0]);
   } catch (error) {
-    console.error("Unable to create product:", error);
-    return res.status(500).json({ message: "Unable to create product." });
+    console.error("Database insert failed:", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+    });
+    return res
+      .status(500)
+      .json({ message: error.message || "Unable to create product." });
   }
 }
 
@@ -256,8 +262,14 @@ async function updateProduct(req, res) {
 
     return res.json(result.rows[0]);
   } catch (error) {
-    console.error("Unable to update product:", error);
-    return res.status(500).json({ message: "Unable to update product." });
+    console.error("Database update failed:", {
+      message: error.message,
+      code: error.code,
+      detail: error.detail,
+    });
+    return res
+      .status(500)
+      .json({ message: error.message || "Unable to update product." });
   }
 }
 

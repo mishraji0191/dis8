@@ -22,7 +22,7 @@ async function loginAdmin(req, res) {
     return res.status(400).json({ message: "Email and password are required." });
   }
 
-  if (!process.env.JWT_SECRET) {
+  if (!process.env.JWT_SECRET) 
     return res.status(500).json({ message: "JWT secret is not configured." });
   }
 

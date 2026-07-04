@@ -74,10 +74,13 @@ CREATE INDEX IF NOT EXISTS user_addresses_user_idx ON user_addresses (user_id);
 CREATE TABLE IF NOT EXISTS cart_items (
   user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  selected_size VARCHAR(40) NOT NULL DEFAULT '',
   quantity INT NOT NULL CHECK (quantity > 0 AND quantity <= 100),
+  unit_price NUMERIC(12,2),
+  price_adjustment NUMERIC(12,2) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (user_id, product_id)
+  PRIMARY KEY (user_id, product_id, selected_size)
 );
 
 CREATE TABLE IF NOT EXISTS wishlists (

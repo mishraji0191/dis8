@@ -1,24 +1,23 @@
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const User = require("../models/userModel");
 const SecurityToken = require("../models/securityTokenModel");
 const UserSession = require("../models/userSessionModel");
 const LoginAttempt = require("../models/loginAttemptModel");
-const { sendOtpSms } = require("../services/otpProviderService");
+const { sendPasswordResetEmail } = require("../services/notificationService");
 const {
   ACCESS_TOKEN_COOKIE,
   REFRESH_TOKEN_COOKIE,
-  generateNumericCode,
   generateSecureToken,
   getClientIp,
   getCookieOptions,
-  logSecurityEvent,
 } = require("../utils/security");
 
 const ACCESS_TOKEN_MAX_AGE_MS = 15 * 60 * 1000;
 const REFRESH_TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 const REMEMBER_DEVICE_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
-const OTP_EXPIRY_MINUTES = 10;
-const MOBILE_LOGIN_PURPOSE = "phone_login";
+const PASSWORD_RESET_EXPIRY_MINUTES = 30;
+const PASSWORD_RESET_PURPOSE = "password_reset";
 
 function logAuthError(context, error, metadata = {}) {
   console.error(context, {
@@ -28,12 +27,7 @@ function logAuthError(context, error, metadata = {}) {
     name: error?.name,
     code: error?.code,
     detail: error?.detail,
-    hint: error?.hint,
-    table: error?.table,
-    column: error?.column,
     constraint: error?.constraint,
-    routine: error?.routine,
-    severity: error?.severity,
   });
 }
 
@@ -42,7 +36,15 @@ function authErrorStatus(error) {
   if (error?.code === "23505") return 409;
   if (error?.code?.startsWith?.("23")) return 409;
   if (error?.code?.startsWith?.("22")) return 400;
-  return 403;
+  return 500;
+}
+
+function ensureJwtConfigured() {
+  if (!process.env.JWT_SECRET) {
+    const error = new Error("JWT secret is not configured.");
+    error.status = 403;
+    throw error;
+  }
 }
 
 function createUserToken(user) {
@@ -65,14 +67,6 @@ function getDeviceName(req) {
   return req.body.deviceName || req.headers["x-device-name"] || req.headers["user-agent"] || "Unknown device";
 }
 
-function ensureJwtConfigured() {
-  if (!process.env.JWT_SECRET) {
-    const error = new Error("JWT secret is not configured.");
-    error.status = 403;
-    throw error;
-  }
-}
-
 async function issueAuthSession(req, res, user, rememberDevice = false) {
   ensureJwtConfigured();
 
@@ -80,6 +74,7 @@ async function issueAuthSession(req, res, user, rememberDevice = false) {
   const refreshToken = generateSecureToken();
   const refreshMaxAgeMs = rememberDevice ? REMEMBER_DEVICE_MAX_AGE_MS : REFRESH_TOKEN_MAX_AGE_MS;
   const expiresAt = new Date(Date.now() + refreshMaxAgeMs);
+
   const session = await UserSession.createSession({
     userId: user.id,
     refreshToken,
@@ -94,144 +89,145 @@ async function issueAuthSession(req, res, user, rememberDevice = false) {
   return { accessToken, refreshToken, session };
 }
 
-async function sendMobileLoginOtp(user) {
-  const otp = generateNumericCode();
-  const expiresAt = new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+async function register(req, res) {
+  const { name, email, phone, password, confirmPassword, rememberMe = true } = req.body;
 
-  await SecurityToken.clearPurpose(user.id, MOBILE_LOGIN_PURPOSE);
-  await SecurityToken.createToken({
-    userId: user.id,
-    purpose: MOBILE_LOGIN_PURPOSE,
-    token: otp,
-    expiresAt,
-  });
-  await sendOtpSms({ phone: user.phone, otp, purpose: MOBILE_LOGIN_PURPOSE });
-
-  return { expiresAt };
-}
-
-async function requestOtpLogin(req, res) {
-  const { phone } = req.body;
+  if (password !== confirmPassword) {
+    return res.status(400).json({ message: "Passwords do not match." });
+  }
 
   try {
-    const user = await User.findOrCreateMobileOtpUser({ phone });
-    const { expiresAt } = await sendMobileLoginOtp(user);
+    const existing = await User.findUserByEmail(email);
+
+    if (existing) {
+      return res.status(409).json({ message: "An account with this email already exists." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const user = await User.createPasswordUser({ name, email, phone, passwordHash });
+    const { accessToken } = await issueAuthSession(req, res, user, rememberMe);
 
     await LoginAttempt.recordLoginAttempt(req, {
       email: user.email,
       phone: user.phone,
-      success: false,
-      reason: "phone_login_requested",
+      success: true,
+      reason: "register",
     });
 
-    return res.status(202).json({
-      message: "OTP sent.",
-      expiresAt,
-      channel: "sms",
-      purpose: MOBILE_LOGIN_PURPOSE,
-      mobile: user.phone,
-    });
+    return res.status(201).json({ token: accessToken, user: User.toPublicUser(user) });
   } catch (error) {
-    logAuthError("Unable to request mobile login OTP.", error, { phone });
-
-    if (error?.code === "23505") {
-      return res.status(409).json({ message: "Mobile number is already linked to another account." });
-    }
-
+    logAuthError("Unable to register user.", error, { email });
     return res.status(authErrorStatus(error)).json({
-      message: error?.status === 403 ? error.message : "Unable to send OTP. Please try again.",
+      message:
+        error?.code === "23505"
+          ? "An account with this email or phone already exists."
+          : "Unable to register. Please try again.",
     });
   }
 }
 
-async function verifyOtpLogin(req, res) {
-  const { phone, otp, rememberDevice = true } = req.body;
+async function login(req, res) {
+  const { email, password, rememberMe = false } = req.body;
 
   try {
-    const user = await User.findUserByPhone(phone);
+    const user = await User.findUserByEmail(email);
 
-    if (!user) {
-      return res.status(404).json({ message: "No OTP request found for this mobile number." });
+    if (!user?.password_hash) {
+      await LoginAttempt.recordLoginAttempt(req, {
+        email,
+        phone: user?.phone,
+        success: false,
+        reason: "invalid_credentials",
+      });
+      return res.status(401).json({ message: "Invalid email or password." });
     }
 
-    const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose: MOBILE_LOGIN_PURPOSE });
+    const matches = await bcrypt.compare(password, user.password_hash);
 
-    if (!tokenRow || Number(tokenRow.user_id) !== Number(user.id)) {
-      logSecurityEvent("otp_login_failed", req, { phone: user.phone, purpose: MOBILE_LOGIN_PURPOSE });
+    if (!matches) {
       await LoginAttempt.recordLoginAttempt(req, {
         email: user.email,
         phone: user.phone,
         success: false,
-        reason: "invalid_or_expired_otp",
+        reason: "invalid_credentials",
       });
-      return res.status(401).json({ message: "Invalid or expired OTP." });
+      return res.status(401).json({ message: "Invalid email or password." });
     }
 
-    await User.markPhoneVerified(user.id);
-
-    const updatedUser = await User.findUserById(user.id);
-    const { accessToken } = await issueAuthSession(req, res, updatedUser, rememberDevice);
+    const { accessToken } = await issueAuthSession(req, res, user, rememberMe);
     await LoginAttempt.recordLoginAttempt(req, {
-      email: updatedUser.email,
-      phone: updatedUser.phone,
+      email: user.email,
+      phone: user.phone,
       success: true,
-      reason: MOBILE_LOGIN_PURPOSE,
+      reason: "password_login",
     });
 
-    return res.json({ token: accessToken, user: User.toPublicUser(updatedUser) });
+    return res.json({ token: accessToken, user: User.toPublicUser(user) });
   } catch (error) {
-    logAuthError("Unable to verify mobile login OTP.", error, { phone });
-    return res.status(authErrorStatus(error)).json({
-      message: error?.status === 403 ? error.message : "Unable to verify OTP. Please try again.",
+    logAuthError("Unable to login user.", error, { email });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to login. Please try again." });
+  }
+}
+
+async function forgotPassword(req, res) {
+  const { email } = req.body;
+
+  try {
+    const user = await User.findUserByEmail(email);
+
+    if (user) {
+      const resetToken = generateSecureToken();
+      const expiresAt = new Date(Date.now() + PASSWORD_RESET_EXPIRY_MINUTES * 60 * 1000);
+
+      await SecurityToken.clearPurpose(user.id, PASSWORD_RESET_PURPOSE);
+      await SecurityToken.createToken({
+        userId: user.id,
+        purpose: PASSWORD_RESET_PURPOSE,
+        token: resetToken,
+        expiresAt,
+      });
+      await sendPasswordResetEmail({ user, resetToken });
+    }
+
+    return res.json({
+      message: "If an account exists for this email, a password reset link has been sent.",
     });
+  } catch (error) {
+    logAuthError("Unable to request password reset.", error, { email });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to send reset link." });
   }
 }
 
-async function requestTwoFactorOtp(req, res) {
-  try {
-    const user = await User.findUserById(req.user.id);
+async function resetPassword(req, res) {
+  const { token, password, confirmPassword } = req.body;
 
-    if (!user) {
-      return res.status(404).json({ message: "User not found." });
+  if (password !== confirmPassword) {
+    return res.status(400).json({ message: "Passwords do not match." });
+  }
+
+  try {
+    const tokenRow = await SecurityToken.consumeToken({
+      token,
+      purpose: PASSWORD_RESET_PURPOSE,
+    });
+
+    if (!tokenRow) {
+      return res.status(400).json({ message: "Invalid or expired reset link." });
     }
 
-    await sendMobileLoginOtp(user);
-    return res.json({ message: "Two-factor OTP sent." });
+    const passwordHash = await bcrypt.hash(password, 12);
+    await User.updatePassword(tokenRow.user_id, passwordHash);
+    await UserSession.revokeAllForUser(tokenRow.user_id);
+    clearAuthCookies(res);
+
+    return res.json({ message: "Password reset successfully. Please login." });
   } catch (error) {
-    logAuthError("Unable to request two-factor OTP.", error, { userId: req.user?.id });
-    return res.status(authErrorStatus(error)).json({ message: "Unable to send OTP." });
+    logAuthError("Unable to reset password.", error);
+    return res.status(authErrorStatus(error)).json({ message: "Unable to reset password." });
   }
 }
 
-async function enableTwoFactor(req, res) {
-  const { otp } = req.body;
-
-  try {
-    const tokenRow = await SecurityToken.consumeToken({ token: otp, purpose: MOBILE_LOGIN_PURPOSE });
-
-    if (!tokenRow || Number(tokenRow.user_id) !== Number(req.user.id)) {
-      return res.status(401).json({ message: "Invalid or expired OTP." });
-    }
-
-    const user = await User.setTwoFactorEnabled(req.user.id, true);
-    return res.json({ user: User.toPublicUser(user), message: "Two-factor authentication enabled." });
-  } catch (error) {
-    logAuthError("Unable to enable two-factor authentication.", error, { userId: req.user?.id });
-    return res.status(authErrorStatus(error)).json({ message: "Unable to enable two-factor authentication." });
-  }
-}
-
-async function disableTwoFactor(req, res) {
-  try {
-    const user = await User.setTwoFactorEnabled(req.user.id, false);
-    return res.json({ user: User.toPublicUser(user), message: "Two-factor authentication disabled." });
-  } catch (error) {
-    logAuthError("Unable to disable two-factor authentication.", error, { userId: req.user?.id });
-    return res.status(authErrorStatus(error)).json({ message: "Unable to disable two-factor authentication." });
-  }
-}
-
-async function me(req, res) {
+async function profile(req, res) {
   try {
     const user = await User.findUserById(req.user.id);
 
@@ -242,7 +238,7 @@ async function me(req, res) {
     return res.json({ user: User.toPublicUser(user) });
   } catch (error) {
     logAuthError("Unable to load user profile.", error, { userId: req.user?.id });
-    return res.status(authErrorStatus(error)).json({ message: "Unable to load user profile." });
+    return res.status(authErrorStatus(error)).json({ message: "Unable to load profile." });
   }
 }
 
@@ -274,6 +270,7 @@ async function refresh(req, res) {
     const accessToken = createUserToken(user);
     const refreshToken = generateSecureToken();
     const refreshMaxAgeMs = session.remember_device ? REMEMBER_DEVICE_MAX_AGE_MS : REFRESH_TOKEN_MAX_AGE_MS;
+
     await UserSession.rotateSession(
       session.id,
       refreshToken,
@@ -327,14 +324,13 @@ async function logout(req, res) {
 }
 
 module.exports = {
-  disableTwoFactor,
-  enableTwoFactor,
+  forgotPassword,
+  login,
   logout,
-  me,
+  profile,
   refresh,
-  requestOtpLogin,
-  requestTwoFactorOtp,
+  register,
+  resetPassword,
   revokeSession,
   sessions,
-  verifyOtpLogin,
 };

@@ -190,6 +190,19 @@ FROM (
 ) matched
 WHERE product.id = matched.product_id;
 
+CREATE TABLE IF NOT EXISTS product_sizes (
+  id BIGSERIAL PRIMARY KEY,
+  product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  size VARCHAR(40) NOT NULL,
+  stock INT NOT NULL DEFAULT 0 CHECK (stock >= 0),
+  price_adjustment NUMERIC(12,2) NOT NULL DEFAULT 0 CHECK (price_adjustment >= 0),
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE (product_id, size)
+);
+
+CREATE INDEX IF NOT EXISTS product_sizes_product_idx
+ON product_sizes (product_id, id);
+
 CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
@@ -378,7 +391,24 @@ ALTER TABLE order_items
 ADD COLUMN IF NOT EXISTS price NUMERIC NOT NULL DEFAULT 0;
 
 ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS selected_size VARCHAR(40) NOT NULL DEFAULT '';
+
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS unit_price NUMERIC(12,2);
+
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS price_adjustment NUMERIC(12,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12,2);
+
+ALTER TABLE order_items
 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+
+UPDATE order_items
+SET unit_price = COALESCE(unit_price, price),
+    subtotal = COALESCE(subtotal, price * quantity)
+WHERE unit_price IS NULL OR subtotal IS NULL;
 
 CREATE TABLE IF NOT EXISTS security_tokens (
   id SERIAL PRIMARY KEY,

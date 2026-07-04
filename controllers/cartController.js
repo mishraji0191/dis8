@@ -10,6 +10,10 @@ async function syncCart(req, res) {
     const items = await Cart.syncCart(req.user.id, req.body.items || []);
     return res.json({ items });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
     if (error.code === "23503") {
       return res.status(400).json({ message: "One or more products do not exist." });
     }
@@ -21,10 +25,19 @@ async function syncCart(req, res) {
 
 async function upsertItem(req, res) {
   try {
-    await Cart.upsertItem(req.user.id, req.body.productId, req.body.quantity);
+    await Cart.upsertItem(
+      req.user.id,
+      req.body.productId,
+      req.body.quantity,
+      req.body.selectedSize
+    );
     const items = await Cart.getCart(req.user.id);
     return res.json({ items });
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ message: error.message });
+    }
+
     if (error.code === "23503") {
       return res.status(400).json({ message: "Product does not exist." });
     }
@@ -35,7 +48,7 @@ async function upsertItem(req, res) {
 }
 
 async function removeItem(req, res) {
-  await Cart.removeItem(req.user.id, req.params.id);
+  await Cart.removeItem(req.user.id, req.params.id, req.query.selectedSize);
   const items = await Cart.getCart(req.user.id);
   return res.json({ items });
 }

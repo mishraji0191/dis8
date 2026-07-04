@@ -36,12 +36,6 @@ const passwordRule = () =>
 
 const loginRules = [emailRule(), passwordRule()];
 
-const removedCustomerAuthRules = [
-  body().custom(() => {
-    throw new Error("This authentication method is no longer available. Use mobile OTP login.");
-  }),
-];
-
 const indianMobileRule = () =>
   body("phone")
     .customSanitizer(cleanString)
@@ -73,10 +67,28 @@ const otpRules = [
   }),
 ];
 
-const registerRules = removedCustomerAuthRules;
-const forgotPasswordRules = removedCustomerAuthRules;
-const resetPasswordRules = removedCustomerAuthRules;
-const customerLoginRules = removedCustomerAuthRules;
+const registerRules = [
+  body("name").customSanitizer(cleanString).isLength({ min: 2, max: 120 }).withMessage("Name is required."),
+  emailRule(),
+  body("phone").customSanitizer(cleanString).isLength({ min: 7, max: 30 }).withMessage("Phone is required."),
+  passwordRule(),
+  body("confirmPassword").isString().isLength({ min: 8 }).withMessage("Confirm password is required."),
+  body("rememberMe").optional().isBoolean(),
+];
+
+const forgotPasswordRules = [emailRule()];
+
+const resetPasswordRules = [
+  body("token").trim().isLength({ min: 32, max: 128 }).withMessage("A valid reset token is required."),
+  passwordRule(),
+  body("confirmPassword").isString().isLength({ min: 8 }).withMessage("Confirm password is required."),
+];
+
+const customerLoginRules = [
+  emailRule(),
+  passwordRule(),
+  body("rememberMe").optional().isBoolean(),
+];
 
 const twoFactorOtpRules = [
   body("otp").trim().isLength({ min: 6, max: 6 }).isNumeric().withMessage("A valid OTP is required."),
@@ -95,8 +107,10 @@ const checkoutRules = [
   body("items").isArray({ min: 1 }).withMessage("At least one order item is required."),
   body("items.*.productId").isInt({ min: 1 }),
   body("items.*.productName").customSanitizer(cleanString).isLength({ min: 1, max: 255 }),
+  body("items.*.selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
   body("items.*.quantity").isInt({ min: 1, max: 100 }),
   body("items.*.price").isFloat({ min: 0 }),
+  body("items.*.priceAdjustment").optional().isFloat({ min: 0 }),
 ];
 
 const paymentOrderRules = [
@@ -110,6 +124,7 @@ const paymentOrderRules = [
   body("customer.pincode").customSanitizer(cleanString).isPostalCode("IN"),
   body("items").isArray({ min: 1 }).withMessage("At least one order item is required."),
   body("items.*.productId").isInt({ min: 1 }),
+  body("items.*.selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
   body("items.*.quantity").isInt({ min: 1, max: 100 }),
 ];
 
@@ -127,11 +142,13 @@ const cartSyncRules = [
   body("items").isArray().withMessage("Cart items must be an array."),
   body("items.*.productId").optional().isInt({ min: 1 }),
   body("items.*.id").optional().isInt({ min: 1 }),
+  body("items.*.selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
   body("items.*.quantity").isInt({ min: 1, max: 100 }),
 ];
 
 const cartItemRules = [
   body("productId").isInt({ min: 1 }),
+  body("selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
   body("quantity").isInt({ min: 1, max: 100 }),
 ];
 

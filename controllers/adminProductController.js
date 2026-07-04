@@ -42,6 +42,9 @@ function normalizeImages({ body, uploadedImages, existingImages = [] }) {
 }
 
 function getProductPayload(body, images) {
+  const sizes = parseProductSizes(body.sizes || body.product_sizes || body.productSizes);
+  const sizedStock = sizes.reduce((total, size) => total + size.stock, 0);
+
   return {
     name: body.name?.trim(),
     description: body.description?.trim() || "",
@@ -51,8 +54,54 @@ function getProductPayload(body, images) {
     subcategory_id: body.subcategory_id || body.subcategoryId || null,
     images,
     image_url: images[0] || "",
-    stock: Number.parseInt(body.stock, 10) || 0,
+    stock: sizes.length > 0 ? sizedStock : Number.parseInt(body.stock, 10) || 0,
+    sizes,
   };
+}
+
+function parseProductSizes(value) {
+  if (!value) return [];
+
+  let parsed = value;
+
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed
+    .map((size) => ({
+      size: String(size.size || size.name || "").trim().toUpperCase(),
+      stock: Number.parseInt(size.stock, 10) || 0,
+      priceAdjustment: Number(size.priceAdjustment ?? size.price_adjustment) || 0,
+    }))
+    .filter((size) => size.size)
+    .filter((size, index, sizes) => sizes.findIndex((item) => item.size === size.size) === index)
+    .slice(0, 20);
+}
+
+function mapProductRow(row) {
+  return {
+    ...row,
+    sizes: Array.isArray(row.sizes) ? row.sizes : [],
+  };
+}
+
+async function replaceProductSizes(client, productId, sizes) {
+  await client.query("DELETE FROM product_sizes WHERE product_id = $1", [productId]);
+
+  for (const size of sizes) {
+    await client.query(
+      `INSERT INTO product_sizes (product_id, size, stock, price_adjustment)
+       VALUES ($1, $2, $3, $4)`,
+      [productId, size.size, size.stock, size.priceAdjustment]
+    );
+  }
 }
 
 async function applyCategorySelection(payload) {
@@ -106,6 +155,16 @@ async function validateProduct(payload) {
     return "Stock cannot be negative.";
   }
 
+  for (const size of payload.sizes) {
+    if (size.stock < 0) {
+      return "Size stock cannot be negative.";
+    }
+
+    if (size.priceAdjustment < 0) {
+      return "Size price adjustment cannot be negative.";
+    }
+  }
+
   return applyCategorySelection(payload);
 }
 
@@ -115,10 +174,24 @@ const productSelect = `
          p.subcategory_id, subcategory.name AS subcategory_name,
          subcategory.slug AS subcategory_slug,
          p.image_url, COALESCE(p.images, ARRAY[]::text[]) AS images,
+         COALESCE(sizes.sizes, '[]'::json) AS sizes,
          p.stock, p.created_at
   FROM products p
   LEFT JOIN categories category ON category.id = p.category_id
   LEFT JOIN categories subcategory ON subcategory.id = p.subcategory_id
+  LEFT JOIN LATERAL (
+    SELECT json_agg(
+      json_build_object(
+        'id', ps.id,
+        'size', ps.size,
+        'stock', ps.stock,
+        'priceAdjustment', ps.price_adjustment
+      )
+      ORDER BY ps.id ASC
+    ) AS sizes
+    FROM product_sizes ps
+    WHERE ps.product_id = p.id
+  ) sizes ON true
 `;
 
 async function listProducts(req, res) {
@@ -128,7 +201,7 @@ async function listProducts(req, res) {
        ORDER BY p.created_at DESC, p.id DESC`
     );
 
-    return res.json(result.rows);
+    return res.json(result.rows.map(mapProductRow));
   } catch (error) {
     console.error("Unable to list products:", error);
     return res.status(500).json({ message: "Unable to list products." });
@@ -146,7 +219,11 @@ async function createProduct(req, res) {
   }
 
   try {
-    const result = await pool.query(
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
       `WITH inserted AS (
          INSERT INTO products (
            name, description, price, category, category_id, subcategory_id,
@@ -161,6 +238,7 @@ async function createProduct(req, res) {
               inserted.subcategory_id, subcategory.name AS subcategory_name,
               subcategory.slug AS subcategory_slug,
               inserted.image_url, COALESCE(inserted.images, ARRAY[]::text[]) AS images,
+              '[]'::json AS sizes,
               inserted.stock, inserted.created_at
        FROM inserted
        LEFT JOIN categories category ON category.id = inserted.category_id
@@ -176,9 +254,20 @@ async function createProduct(req, res) {
         payload.images,
         payload.stock,
       ]
-    );
+      );
 
-    return res.status(201).json(result.rows[0]);
+      await replaceProductSizes(client, result.rows[0].id, payload.sizes);
+      await client.query("COMMIT");
+
+      const created = await pool.query(`${productSelect} WHERE p.id = $1`, [result.rows[0].id]);
+
+      return res.status(201).json(mapProductRow(created.rows[0]));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error("Database insert failed:", {
       message: error.message,
@@ -221,7 +310,11 @@ async function updateProduct(req, res) {
       return res.status(400).json({ message: validationError });
     }
 
-    const result = await pool.query(
+    const client = await pool.connect();
+
+    try {
+      await client.query("BEGIN");
+      const result = await client.query(
       `WITH updated AS (
          UPDATE products
          SET name = $1,
@@ -242,6 +335,7 @@ async function updateProduct(req, res) {
               updated.subcategory_id, subcategory.name AS subcategory_name,
               subcategory.slug AS subcategory_slug,
               updated.image_url, COALESCE(updated.images, ARRAY[]::text[]) AS images,
+              '[]'::json AS sizes,
               updated.stock, updated.created_at
        FROM updated
        LEFT JOIN categories category ON category.id = updated.category_id
@@ -258,9 +352,20 @@ async function updateProduct(req, res) {
         payload.stock,
         id,
       ]
-    );
+      );
 
-    return res.json(result.rows[0]);
+      await replaceProductSizes(client, id, payload.sizes);
+      await client.query("COMMIT");
+
+      const updated = await pool.query(`${productSelect} WHERE p.id = $1`, [id]);
+
+      return res.json(mapProductRow(updated.rows[0] || result.rows[0]));
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     console.error("Database update failed:", {
       message: error.message,

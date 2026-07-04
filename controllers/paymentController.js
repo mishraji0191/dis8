@@ -31,30 +31,62 @@ function getCustomer(customer) {
 }
 
 async function getOrderItemsFromProducts(requestItems) {
-  const quantitiesByProductId = new Map(
-    requestItems.map((item) => [Number(item.productId), Number(item.quantity)])
-  );
-  const productIds = [...quantitiesByProductId.keys()];
+  const resolvedItems = [];
 
-  const result = await pool.query(
-    `SELECT id, name, price
-     FROM products
-     WHERE id = ANY($1::int[])`,
-    [productIds]
-  );
+  for (const item of requestItems) {
+    const productId = Number(item.productId);
+    const quantity = Number(item.quantity);
+    const selectedSize = String(item.selectedSize || item.size || "").trim().toUpperCase();
+    const result = await pool.query(
+      `SELECT p.id, p.name, p.price, p.stock,
+              ps.size,
+              ps.stock AS size_stock,
+              ps.price_adjustment,
+              (SELECT COUNT(*)::int FROM product_sizes WHERE product_id = p.id) AS size_count
+       FROM products p
+       LEFT JOIN product_sizes ps ON ps.product_id = p.id AND ps.size = $2
+       WHERE p.id = $1`,
+      [productId, selectedSize]
+    );
+    const product = result.rows[0];
 
-  if (result.rowCount !== productIds.length) {
-    const error = new Error("One or more products are unavailable.");
-    error.status = 400;
-    throw error;
+    if (!product) {
+      const error = new Error("One or more products are unavailable.");
+      error.status = 400;
+      throw error;
+    }
+
+    const hasSizes = Number(product.size_count) > 0;
+
+    if (hasSizes && !product.size) {
+      const error = new Error(`Select a valid size for ${product.name}.`);
+      error.status = 400;
+      throw error;
+    }
+
+    const stock = hasSizes ? Number(product.size_stock) || 0 : Number(product.stock) || 0;
+
+    if (quantity > stock) {
+      const error = new Error(`Only ${stock} units available for ${product.name}${hasSizes ? ` (${product.size})` : ""}.`);
+      error.status = 400;
+      throw error;
+    }
+
+    const priceAdjustment = hasSizes ? Number(product.price_adjustment) || 0 : 0;
+    const price = Number(product.price) + priceAdjustment;
+
+    resolvedItems.push({
+      productId: product.id,
+      productName: product.name,
+      selectedSize: hasSizes ? product.size : "",
+      quantity,
+      price,
+      priceAdjustment,
+      subtotal: price * quantity,
+    });
   }
 
-  return result.rows.map((product) => ({
-    productId: product.id,
-    productName: product.name,
-    quantity: quantitiesByProductId.get(product.id),
-    price: Number(product.price) || 0,
-  }));
+  return resolvedItems;
 }
 
 function verifyRazorpaySignature({ razorpayOrderId, razorpayPaymentId, razorpaySignature }) {

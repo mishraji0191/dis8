@@ -14,8 +14,12 @@ async function getOrderItems(client, orderIds) {
             oi.order_id,
             oi.product_id,
             oi.product_name,
+            oi.selected_size,
             oi.quantity,
             oi.price,
+            oi.unit_price,
+            oi.price_adjustment,
+            oi.subtotal,
             p.image_url,
             COALESCE(p.images, ARRAY[]::text[]) AS images
      FROM order_items oi
@@ -136,10 +140,26 @@ async function createOrderWithItems({
     order = updatedOrder.rows[0];
 
     for (const item of items) {
+      const unitPrice = Number(item.price ?? item.unitPrice) || 0;
+      const quantity = Number(item.quantity) || 1;
+      const subtotal = unitPrice * quantity;
+
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, product_name, quantity, price)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [order.id, item.productId, item.productName, item.quantity, item.price]
+        `INSERT INTO order_items (
+           order_id, product_id, product_name, selected_size, quantity,
+           price, unit_price, price_adjustment, subtotal
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8)`,
+        [
+          order.id,
+          item.productId,
+          item.productName,
+          item.selectedSize || "",
+          quantity,
+          unitPrice,
+          Number(item.priceAdjustment) || 0,
+          subtotal,
+        ]
       );
     }
 

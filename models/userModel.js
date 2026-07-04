@@ -54,6 +54,12 @@ async function createUser({ name, email, phone, passwordHash }) {
   return result.rows[0];
 }
 
+async function createPasswordUser({ name, email, phone, passwordHash }) {
+  const user = await createUser({ name, email, phone, passwordHash });
+  await markEmailVerified(user.id);
+  return findUserById(user.id);
+}
+
 async function findOrCreateMobileOtpUser({ phone, name }) {
   const normalizedPhone = normalizePhone(phone);
   const existing = await findUserByPhone(normalizedPhone);
@@ -123,6 +129,7 @@ async function setTwoFactorEnabled(userId, enabled) {
 }
 
 module.exports = {
+  createPasswordUser,
   createUser,
   findOrCreateMobileOtpUser,
   findUserByEmail,

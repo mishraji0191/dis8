@@ -26,6 +26,12 @@ function getUploadedProductImages(req) {
   ].map((file) => file.path).filter(Boolean);
 }
 
+function getUploadedCustomizationSectionImages(req) {
+  return (req.files?.customizationSectionImages || [])
+    .map((file) => file.path)
+    .filter(Boolean);
+}
+
 function normalizeImages({ body, uploadedImages, existingImages = [] }) {
   const keptImages = parseImageList(body.existingImages);
   const urlImages = parseImageList(body.images || body.image_urls);
@@ -41,7 +47,7 @@ function normalizeImages({ body, uploadedImages, existingImages = [] }) {
     .slice(0, 10);
 }
 
-function getProductPayload(body, images) {
+function getProductPayload(body, images, sectionImages = []) {
   const sizes = parseProductSizes(body.sizes || body.product_sizes || body.productSizes);
   const sizedStock = sizes.reduce((total, size) => total + size.stock, 0);
 
@@ -56,6 +62,166 @@ function getProductPayload(body, images) {
     image_url: images[0] || "",
     stock: sizes.length > 0 ? sizedStock : Number.parseInt(body.stock, 10) || 0,
     sizes,
+    customization_settings: parseCustomizationSettings(
+      body.customization || body.customization_settings || body.customizationSettings,
+      sectionImages,
+      body.customizationSectionImageSlugs
+    ),
+  };
+}
+
+const defaultCustomizationSettings = {
+  sports: false,
+  marathon: false,
+  general: false,
+  fields: [],
+  customizationSections: [],
+};
+
+function parseBoolean(value) {
+  return value === true || value === "true" || value === "on" || value === "1";
+}
+
+function normalizeCustomizationField(field) {
+  const key = String(field.key || field.name || field.label || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  const label = String(field.label || field.name || key || "")
+    .trim()
+    .slice(0, 80);
+  const type = ["text", "number", "select", "textarea", "file", "radio"].includes(field.type)
+    ? field.type
+    : "text";
+  const group = String(field.group || "general")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "general";
+  const options = Array.isArray(field.options)
+    ? field.options.map((option) => String(option).trim()).filter(Boolean).slice(0, 20)
+    : [];
+
+  if (!key || !label) return null;
+
+  return {
+    key,
+    label,
+    type,
+    group,
+    options,
+    required: parseBoolean(field.required),
+    enabled: field.enabled === undefined ? true : parseBoolean(field.enabled),
+  };
+}
+
+function normalizeSectionSlug(value, fallback = "") {
+  return String(value || fallback || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function parseStringList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item).trim()).filter(Boolean) : [];
+  } catch {
+    return String(value)
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+}
+
+function normalizeCustomizationSection(section, index, uploadedImageMap = new Map()) {
+  const title = String(section.title || section.name || "")
+    .trim()
+    .slice(0, 80);
+  const slug = normalizeSectionSlug(section.slug, title);
+
+  if (!title || !slug) return null;
+
+  const fields = Array.isArray(section.fields)
+    ? section.fields
+        .map((field) => normalizeCustomizationField({ ...field, group: slug }))
+        .filter(Boolean)
+        .slice(0, 40)
+    : [];
+  const uploadedImage = uploadedImageMap.get(slug);
+  const image = uploadedImage || String(section.image || section.image_url || "").trim();
+
+  return {
+    title,
+    slug,
+    description: String(section.description || "").trim().slice(0, 600),
+    image,
+    enabled: section.enabled === undefined ? true : parseBoolean(section.enabled),
+    display_order: Number.parseInt(section.display_order ?? section.displayOrder ?? index + 1, 10) || index + 1,
+    fields,
+  };
+}
+
+function getLegacySections(parsed, fields) {
+  return ["sports", "marathon", "general"]
+    .filter((type) => parseBoolean(parsed[type]))
+    .map((type, index) => ({
+      title: type === "sports" ? "Sports Kit" : type.charAt(0).toUpperCase() + type.slice(1),
+      slug: type,
+      description: "",
+      image: "",
+      enabled: true,
+      display_order: index + 1,
+      fields: fields.filter((field) => field.group === type),
+    }));
+}
+
+function parseCustomizationSettings(value, uploadedSectionImages = [], sectionImageSlugValue = []) {
+  if (!value) return defaultCustomizationSettings;
+
+  let parsed = value;
+
+  if (typeof value === "string") {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return defaultCustomizationSettings;
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") return defaultCustomizationSettings;
+
+  const fields = Array.isArray(parsed.fields)
+    ? parsed.fields.map(normalizeCustomizationField).filter(Boolean).slice(0, 80)
+    : [];
+  const sectionImageSlugs = parseStringList(sectionImageSlugValue);
+  const uploadedImageMap = new Map(
+    uploadedSectionImages.map((image, index) => [sectionImageSlugs[index], image]).filter(([slug]) => slug)
+  );
+  const rawSections =
+    Array.isArray(parsed.customizationSections)
+      ? parsed.customizationSections
+      : Array.isArray(parsed.sections)
+        ? parsed.sections
+        : [];
+  const customizationSections = rawSections
+    .map((section, index) => normalizeCustomizationSection(section, index, uploadedImageMap))
+    .filter(Boolean)
+    .sort((a, b) => a.display_order - b.display_order);
+  const legacySections =
+    customizationSections.length > 0 ? [] : getLegacySections(parsed, fields);
+
+  return {
+    sports: parseBoolean(parsed.sports),
+    marathon: parseBoolean(parsed.marathon),
+    general: parseBoolean(parsed.general),
+    fields,
+    customizationSections: customizationSections.length > 0 ? customizationSections : legacySections,
   };
 }
 
@@ -86,9 +252,15 @@ function parseProductSizes(value) {
 }
 
 function mapProductRow(row) {
+  const customization = row.customization || defaultCustomizationSettings;
+
   return {
     ...row,
     sizes: Array.isArray(row.sizes) ? row.sizes : [],
+    customization,
+    customizationSections: Array.isArray(customization.customizationSections)
+      ? customization.customizationSections
+      : [],
   };
 }
 
@@ -175,6 +347,7 @@ const productSelect = `
          subcategory.slug AS subcategory_slug,
          p.image_url, COALESCE(p.images, ARRAY[]::text[]) AS images,
          COALESCE(sizes.sizes, '[]'::json) AS sizes,
+         COALESCE(p.customization_settings, '{"sports":false,"marathon":false,"general":false,"fields":[]}'::jsonb) AS customization,
          p.stock, p.created_at
   FROM products p
   LEFT JOIN categories category ON category.id = p.category_id
@@ -210,8 +383,9 @@ async function listProducts(req, res) {
 
 async function createProduct(req, res) {
   const uploadedImages = getUploadedProductImages(req);
+  const sectionImages = getUploadedCustomizationSectionImages(req);
   const images = normalizeImages({ body: req.body, uploadedImages });
-  const payload = getProductPayload(req.body, images);
+  const payload = getProductPayload(req.body, images, sectionImages);
   const validationError = await validateProduct(payload);
 
   if (validationError) {
@@ -227,9 +401,9 @@ async function createProduct(req, res) {
       `WITH inserted AS (
          INSERT INTO products (
            name, description, price, category, category_id, subcategory_id,
-           image_url, images, stock
+           image_url, images, stock, customization_settings
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING *
        )
        SELECT inserted.id, inserted.name, inserted.description, inserted.price,
@@ -239,6 +413,7 @@ async function createProduct(req, res) {
               subcategory.slug AS subcategory_slug,
               inserted.image_url, COALESCE(inserted.images, ARRAY[]::text[]) AS images,
               '[]'::json AS sizes,
+              COALESCE(inserted.customization_settings, '{"sports":false,"marathon":false,"general":false,"fields":[]}'::jsonb) AS customization,
               inserted.stock, inserted.created_at
        FROM inserted
        LEFT JOIN categories category ON category.id = inserted.category_id
@@ -253,6 +428,7 @@ async function createProduct(req, res) {
         payload.image_url,
         payload.images,
         payload.stock,
+        JSON.stringify(payload.customization_settings),
       ]
       );
 
@@ -298,12 +474,13 @@ async function updateProduct(req, res) {
         ? existingResult.rows[0].images
         : [existingResult.rows[0].image_url].filter(Boolean);
     const uploadedImages = getUploadedProductImages(req);
+    const sectionImages = getUploadedCustomizationSectionImages(req);
     const images = normalizeImages({
       body: req.body,
       uploadedImages,
       existingImages,
     });
-    const payload = getProductPayload(req.body, images);
+    const payload = getProductPayload(req.body, images, sectionImages);
     const validationError = await validateProduct(payload);
 
     if (validationError) {
@@ -325,8 +502,9 @@ async function updateProduct(req, res) {
              subcategory_id = $6,
              image_url = $7,
              images = $8,
-             stock = $9
-         WHERE id = $10
+             stock = $9,
+             customization_settings = $10
+         WHERE id = $11
          RETURNING *
        )
        SELECT updated.id, updated.name, updated.description, updated.price,
@@ -336,6 +514,7 @@ async function updateProduct(req, res) {
               subcategory.slug AS subcategory_slug,
               updated.image_url, COALESCE(updated.images, ARRAY[]::text[]) AS images,
               '[]'::json AS sizes,
+              COALESCE(updated.customization_settings, '{"sports":false,"marathon":false,"general":false,"fields":[]}'::jsonb) AS customization,
               updated.stock, updated.created_at
        FROM updated
        LEFT JOIN categories category ON category.id = updated.category_id
@@ -350,6 +529,7 @@ async function updateProduct(req, res) {
         payload.image_url,
         payload.images,
         payload.stock,
+        JSON.stringify(payload.customization_settings),
         id,
       ]
       );

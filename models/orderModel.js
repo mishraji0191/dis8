@@ -20,6 +20,9 @@ async function getOrderItems(client, orderIds) {
             oi.unit_price,
             oi.price_adjustment,
             oi.subtotal,
+            oi.customization_type,
+            oi.customization_data,
+            oi.uploaded_files,
             p.image_url,
             COALESCE(p.images, ARRAY[]::text[]) AS images
      FROM order_items oi
@@ -147,9 +150,10 @@ async function createOrderWithItems({
       await client.query(
         `INSERT INTO order_items (
            order_id, product_id, product_name, selected_size, quantity,
-           price, unit_price, price_adjustment, subtotal
+           price, unit_price, price_adjustment, subtotal,
+           customization_type, customization_data, uploaded_files
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8)`,
+         VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10::jsonb, $11::jsonb)`,
         [
           order.id,
           item.productId,
@@ -159,6 +163,9 @@ async function createOrderWithItems({
           unitPrice,
           Number(item.priceAdjustment) || 0,
           subtotal,
+          item.customizationType || "",
+          JSON.stringify(item.customizationData || {}),
+          JSON.stringify(Array.isArray(item.uploadedFiles) ? item.uploadedFiles : []),
         ]
       );
     }

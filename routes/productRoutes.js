@@ -11,6 +11,7 @@ router.get("/", async (req, res) => {
               subcategory.slug AS subcategory_slug,
               p.image_url, COALESCE(p.images, ARRAY[]::text[]) AS images,
               COALESCE(sizes.sizes, '[]'::json) AS sizes,
+              COALESCE(p.customization_settings, '{"sports":false,"marathon":false,"general":false,"fields":[]}'::jsonb) AS customization,
               p.stock, p.created_at
        FROM products p
        LEFT JOIN categories category ON category.id = p.category_id
@@ -37,6 +38,9 @@ router.get("/", async (req, res) => {
       result.rows.map((product) => ({
         ...product,
         imageUrl: product.images?.[0] || product.image_url,
+        customizationSections: Array.isArray(product.customization?.customizationSections)
+          ? product.customization.customizationSections
+          : [],
       }))
     );
   } catch (error) {

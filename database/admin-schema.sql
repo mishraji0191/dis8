@@ -169,6 +169,9 @@ ADD COLUMN IF NOT EXISTS stock INT NOT NULL DEFAULT 0;
 ALTER TABLE products
 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
 
+ALTER TABLE products
+ADD COLUMN IF NOT EXISTS customization_settings JSONB NOT NULL DEFAULT '{"sports":false,"marathon":false,"general":false,"fields":[]}'::jsonb;
+
 UPDATE products
 SET images = ARRAY[image_url]
 WHERE image_url IS NOT NULL
@@ -401,6 +404,15 @@ ADD COLUMN IF NOT EXISTS price_adjustment NUMERIC(12,2) NOT NULL DEFAULT 0;
 
 ALTER TABLE order_items
 ADD COLUMN IF NOT EXISTS subtotal NUMERIC(12,2);
+
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS customization_type VARCHAR(40) NOT NULL DEFAULT '';
+
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS customization_data JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+ALTER TABLE order_items
+ADD COLUMN IF NOT EXISTS uploaded_files JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 ALTER TABLE order_items
 ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP;

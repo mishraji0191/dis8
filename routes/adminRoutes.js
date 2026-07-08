@@ -78,6 +78,7 @@ router.post(
   uploadProductImage.fields([
     { name: "images", maxCount: 10 },
     { name: "image", maxCount: 1 },
+    { name: "customizationSectionImages", maxCount: 10 },
   ]),
   productController.createProduct
 );
@@ -87,6 +88,7 @@ router.put(
   uploadProductImage.fields([
     { name: "images", maxCount: 10 },
     { name: "image", maxCount: 1 },
+    { name: "customizationSectionImages", maxCount: 10 },
   ]),
   productController.updateProduct
 );

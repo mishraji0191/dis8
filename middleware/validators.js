@@ -108,6 +108,9 @@ const checkoutRules = [
   body("items.*.productId").isInt({ min: 1 }),
   body("items.*.productName").customSanitizer(cleanString).isLength({ min: 1, max: 255 }),
   body("items.*.selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
+  body("items.*.customizationType").optional({ checkFalsy: true }).customSanitizer(cleanString).isIn(["sports", "marathon", "general"]),
+  body("items.*.customizationData").optional().isObject(),
+  body("items.*.uploadedFiles").optional().isArray({ max: 6 }),
   body("items.*.quantity").isInt({ min: 1, max: 100 }),
   body("items.*.price").isFloat({ min: 0 }),
   body("items.*.priceAdjustment").optional().isFloat({ min: 0 }),
@@ -125,6 +128,9 @@ const paymentOrderRules = [
   body("items").isArray({ min: 1 }).withMessage("At least one order item is required."),
   body("items.*.productId").isInt({ min: 1 }),
   body("items.*.selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
+  body("items.*.customizationType").optional({ checkFalsy: true }).customSanitizer(cleanString).isIn(["sports", "marathon", "general"]),
+  body("items.*.customizationData").optional().isObject(),
+  body("items.*.uploadedFiles").optional().isArray({ max: 6 }),
   body("items.*.quantity").isInt({ min: 1, max: 100 }),
 ];
 
@@ -143,12 +149,18 @@ const cartSyncRules = [
   body("items.*.productId").optional().isInt({ min: 1 }),
   body("items.*.id").optional().isInt({ min: 1 }),
   body("items.*.selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
+  body("items.*.customizationType").optional({ checkFalsy: true }).customSanitizer(cleanString).isIn(["sports", "marathon", "general"]),
+  body("items.*.customizationData").optional().isObject(),
+  body("items.*.uploadedFiles").optional().isArray({ max: 6 }),
   body("items.*.quantity").isInt({ min: 1, max: 100 }),
 ];
 
 const cartItemRules = [
   body("productId").isInt({ min: 1 }),
   body("selectedSize").optional({ checkFalsy: true }).customSanitizer(cleanString).isLength({ max: 40 }),
+  body("customizationType").optional({ checkFalsy: true }).customSanitizer(cleanString).isIn(["sports", "marathon", "general"]),
+  body("customizationData").optional().isObject(),
+  body("uploadedFiles").optional().isArray({ max: 6 }),
   body("quantity").isInt({ min: 1, max: 100 }),
 ];
 

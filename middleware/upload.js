@@ -20,26 +20,42 @@ const imageMimeTypes = new Set([
   "image/webp",
 ]);
 
-function createCloudinaryStorage(folder) {
+const customizationMimeTypes = new Set([
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "application/pdf",
+]);
+
+function createCloudinaryStorage(folder, resourceType = "image", allowedFormats = allowedImageFormats) {
   return new CloudinaryStorage({
     cloudinary,
     params: async (req, file) => {
       return {
         folder,
-        resource_type: "image",
-        allowed_formats: allowedImageFormats,
+        resource_type: resourceType,
+        allowed_formats: allowedFormats,
       };
     },
   });
 }
 
-const fileFilter = (req, file, cb) => {
+const imageFileFilter = (req, file, cb) => {
   if (file.mimetype.startsWith("image/") && imageMimeTypes.has(file.mimetype)) {
     cb(null, true);
     return;
   }
 
   cb(new Error("Only image files are allowed."));
+};
+
+const customizationFileFilter = (req, file, cb) => {
+  if (customizationMimeTypes.has(file.mimetype)) {
+    cb(null, true);
+    return;
+  }
+
+  cb(new Error("Only PNG, JPG, JPEG, and PDF files are allowed."));
 };
 
 function handleUploadError(error, req, res, next) {
@@ -95,10 +111,10 @@ function withUploadErrorHandling(upload) {
   };
 }
 
-function createUpload(folder, fileSize) {
+function createUpload(folder, fileSize, fileFilter = imageFileFilter, resourceType = "image", allowedFormats = allowedImageFormats) {
   return withUploadErrorHandling(
     multer({
-      storage: createCloudinaryStorage(folder),
+      storage: createCloudinaryStorage(folder, resourceType, allowedFormats),
       fileFilter,
       limits: {
         fileSize,
@@ -112,9 +128,17 @@ const uploadHeroSliderImage = createUpload("DIS8/hero-slider", 10 * 1024 * 1024)
 const uploadCategoryImage = createUpload("DIS8/categories", 5 * 1024 * 1024);
 const uploadSettingsImage = createUpload("DIS8/settings", 5 * 1024 * 1024);
 const uploadPaymentScreenshot = createUpload("DIS8/payments", 5 * 1024 * 1024);
+const uploadCustomizationFile = createUpload(
+  "DIS8/customizations",
+  10 * 1024 * 1024,
+  customizationFileFilter,
+  "auto",
+  ["jpg", "jpeg", "png", "pdf"]
+);
 
 module.exports = {
   uploadCategoryImage,
+  uploadCustomizationFile,
   uploadHeroSliderImage,
   uploadPaymentScreenshot,
   uploadProductImage,

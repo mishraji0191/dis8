@@ -30,6 +30,25 @@ function getCustomer(customer) {
   };
 }
 
+function normalizeCustomizationType(value) {
+  const type = String(value || "").trim().toLowerCase();
+  return ["sports", "marathon", "general"].includes(type) ? type : "";
+}
+
+function normalizeUploadedFiles(value) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((file) => ({
+      url: String(file.url || "").trim(),
+      name: String(file.name || "Uploaded file").trim(),
+      mimeType: String(file.mimeType || "").trim(),
+      size: Number(file.size) || 0,
+    }))
+    .filter((file) => file.url)
+    .slice(0, 6);
+}
+
 async function getOrderItemsFromProducts(requestItems) {
   const resolvedItems = [];
 
@@ -83,6 +102,12 @@ async function getOrderItemsFromProducts(requestItems) {
       price,
       priceAdjustment,
       subtotal: price * quantity,
+      customizationType: normalizeCustomizationType(item.customizationType),
+      customizationData:
+        item.customizationData && typeof item.customizationData === "object" && !Array.isArray(item.customizationData)
+          ? item.customizationData
+          : {},
+      uploadedFiles: normalizeUploadedFiles(item.uploadedFiles),
     });
   }
 

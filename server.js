@@ -14,6 +14,7 @@ const cartRoutes = require("./routes/cartRoutes");
 const accountRoutes = require("./routes/accountRoutes");
 const shippingRoutes = require("./routes/shippingRoutes");
 const heroSliderRoutes = require("./routes/heroSliderRoutes");
+const customizationRoutes = require("./routes/customizationRoutes");
 const {
   applySecurityMiddleware,
   cookieCsrfGuard,
@@ -46,6 +47,7 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/account", accountRoutes);
 app.use("/api/shipping", shippingRoutes);
+app.use("/api/customization", customizationRoutes);
 app.use("/api", privateRoutes);
 app.use("/api/admin", adminRoutes);
 

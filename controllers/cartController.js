@@ -29,7 +29,12 @@ async function upsertItem(req, res) {
       req.user.id,
       req.body.productId,
       req.body.quantity,
-      req.body.selectedSize
+      req.body.selectedSize,
+      {
+        customizationType: req.body.customizationType,
+        customizationData: req.body.customizationData,
+        uploadedFiles: req.body.uploadedFiles,
+      }
     );
     const items = await Cart.getCart(req.user.id);
     return res.json({ items });

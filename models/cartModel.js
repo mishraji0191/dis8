@@ -1,17 +1,65 @@
 const pool = require("../config/db");
+const crypto = require("crypto");
 
 function normalizeSize(value) {
   return String(value || "").trim().toUpperCase();
 }
 
+function normalizeCustomizationType(value) {
+  const type = String(value || "").trim().toLowerCase();
+  return ["sports", "marathon", "general"].includes(type) ? type : "";
+}
+
+function normalizeJsonObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  return value;
+}
+
+function normalizeUploadedFiles(value) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .map((file) => ({
+      url: String(file.url || file.path || "").trim(),
+      name: String(file.name || file.originalname || "Uploaded file").trim(),
+      mimeType: String(file.mimeType || file.mimetype || "").trim(),
+      size: Number(file.size) || 0,
+    }))
+    .filter((file) => file.url)
+    .slice(0, 6);
+}
+
+function createCartItemKey({ customizationType, customizationData, uploadedFiles }) {
+  const serialized = JSON.stringify({
+    customizationType,
+    customizationData,
+    uploadedFiles,
+  });
+
+  return crypto.createHash("sha1").update(serialized).digest("hex").slice(0, 40);
+}
+
 function normalizeItems(items = []) {
   return items
     .filter((item) => item && Number(item.productId || item.id) > 0 && Number(item.quantity) > 0)
-    .map((item) => ({
-      productId: Number(item.productId || item.id),
-      selectedSize: normalizeSize(item.selectedSize || item.size),
-      quantity: Math.min(Number(item.quantity), 100),
-    }));
+    .map((item) => {
+      const customizationType = normalizeCustomizationType(item.customizationType);
+      const customizationData = normalizeJsonObject(item.customizationData);
+      const uploadedFiles = normalizeUploadedFiles(item.uploadedFiles);
+
+      return {
+        productId: Number(item.productId || item.id),
+        selectedSize: normalizeSize(item.selectedSize || item.size),
+        quantity: Math.min(Number(item.quantity), 100),
+        customizationType,
+        customizationData,
+        uploadedFiles,
+        cartItemKey: createCartItemKey({ customizationType, customizationData, uploadedFiles }),
+      };
+    });
 }
 
 async function getProductPricing(productId, selectedSize = "") {
@@ -63,6 +111,10 @@ async function getCart(userId) {
     `SELECT ci.product_id AS "productId",
             ci.selected_size AS "selectedSize",
             ci.quantity,
+            ci.customization_type AS "customizationType",
+            ci.customization_data AS "customizationData",
+            ci.uploaded_files AS "uploadedFiles",
+            ci.cart_item_key AS "cartItemKey",
             COALESCE(ci.unit_price, p.price + COALESCE(ps.price_adjustment, 0)) AS price,
             COALESCE(ci.price_adjustment, ps.price_adjustment, 0) AS "priceAdjustment",
             p.name,
@@ -81,8 +133,12 @@ async function getCart(userId) {
   return result.rows;
 }
 
-async function upsertItem(userId, productId, quantity, selectedSize = "") {
+async function upsertItem(userId, productId, quantity, selectedSize = "", customization = {}) {
   const pricing = await getProductPricing(productId, selectedSize);
+  const customizationType = normalizeCustomizationType(customization.customizationType);
+  const customizationData = normalizeJsonObject(customization.customizationData);
+  const uploadedFiles = normalizeUploadedFiles(customization.uploadedFiles);
+  const cartItemKey = createCartItemKey({ customizationType, customizationData, uploadedFiles });
 
   if (quantity > pricing.availableStock) {
     const error = new Error("Requested quantity exceeds available stock.");
@@ -92,12 +148,16 @@ async function upsertItem(userId, productId, quantity, selectedSize = "") {
 
   const result = await pool.query(
     `INSERT INTO cart_items
-       (user_id, product_id, selected_size, quantity, unit_price, price_adjustment)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (user_id, product_id, selected_size)
+       (user_id, product_id, selected_size, quantity, unit_price, price_adjustment,
+        customization_type, customization_data, uploaded_files, cart_item_key)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+     ON CONFLICT (user_id, product_id, selected_size, cart_item_key)
      DO UPDATE SET quantity = EXCLUDED.quantity,
                    unit_price = EXCLUDED.unit_price,
                    price_adjustment = EXCLUDED.price_adjustment,
+                   customization_type = EXCLUDED.customization_type,
+                   customization_data = EXCLUDED.customization_data,
+                   uploaded_files = EXCLUDED.uploaded_files,
                    updated_at = CURRENT_TIMESTAMP
      RETURNING user_id`,
     [
@@ -107,6 +167,10 @@ async function upsertItem(userId, productId, quantity, selectedSize = "") {
       quantity,
       pricing.unitPrice,
       pricing.priceAdjustment,
+      customizationType,
+      JSON.stringify(customizationData),
+      JSON.stringify(uploadedFiles),
+      cartItemKey,
     ]
   );
 
@@ -143,12 +207,16 @@ async function syncCart(userId, items) {
 
       await client.query(
         `INSERT INTO cart_items
-           (user_id, product_id, selected_size, quantity, unit_price, price_adjustment)
-         VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (user_id, product_id, selected_size)
+           (user_id, product_id, selected_size, quantity, unit_price, price_adjustment,
+            customization_type, customization_data, uploaded_files, cart_item_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+         ON CONFLICT (user_id, product_id, selected_size, cart_item_key)
          DO UPDATE SET quantity = EXCLUDED.quantity,
                        unit_price = EXCLUDED.unit_price,
                        price_adjustment = EXCLUDED.price_adjustment,
+                       customization_type = EXCLUDED.customization_type,
+                       customization_data = EXCLUDED.customization_data,
+                       uploaded_files = EXCLUDED.uploaded_files,
                        updated_at = CURRENT_TIMESTAMP`,
         [
           userId,
@@ -157,6 +225,10 @@ async function syncCart(userId, items) {
           item.quantity,
           pricing.unitPrice,
           pricing.priceAdjustment,
+          item.customizationType,
+          JSON.stringify(item.customizationData),
+          JSON.stringify(item.uploadedFiles),
+          item.cartItemKey,
         ]
       );
     }

@@ -16,9 +16,10 @@ function toPublicAdmin(admin) {
 }
 
 async function findAdminByEmail(email) {
+  const normalizedEmail = normalizeEmail(email);
   const result = await pool.query(
-    `SELECT ${ADMIN_COLUMNS} FROM admins WHERE email = $1`,
-    [normalizeEmail(email)]
+    `SELECT ${ADMIN_COLUMNS} FROM admins WHERE LOWER(email) = LOWER($1)`,
+    [normalizedEmail]
   );
 
   return result.rows[0] || null;

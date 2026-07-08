@@ -36,6 +36,15 @@ const passwordRule = () =>
 
 const loginRules = [emailRule(), passwordRule()];
 
+const adminLoginRules = [
+  body("email")
+    .trim()
+    .isEmail()
+    .withMessage("A valid email is required.")
+    .toLowerCase(),
+  passwordRule(),
+];
+
 const indianMobileRule = () =>
   body("phone")
     .customSanitizer(cleanString)
@@ -165,6 +174,7 @@ const cartItemRules = [
 ];
 
 module.exports = {
+  adminLoginRules,
   checkoutRules,
   customerLoginRules,
   forgotPasswordRules,

@@ -23,16 +23,39 @@ function setAdminCookie(res, token) {
   );
 }
 
+function logAdminLoginDebug(details) {
+  console.info("[admin-login]", JSON.stringify(details));
+}
+
 async function loginAdmin(req, res) {
-  const { email, password } = req.body;
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const { password } = req.body;
+
+  logAdminLoginDebug({
+    step: "received",
+    email,
+  });
 
   if (!email || !password) {
+    logAdminLoginDebug({
+      step: "failed",
+      reason: "missing_email_or_password",
+      emailReceived: Boolean(email),
+      passwordReceived: Boolean(password),
+    });
+
     return res.status(400).json({
       message: "Email and password are required.",
     });
   }
 
   if (!process.env.JWT_SECRET) {
+    logAdminLoginDebug({
+      step: "failed",
+      reason: "missing_jwt_secret",
+      email,
+    });
+
     return res.status(500).json({
       message: "JWT secret is not configured.",
     });
@@ -42,15 +65,38 @@ async function loginAdmin(req, res) {
     const admin = await Admin.findAdminByEmail(email);
 
     if (!admin) {
+      logAdminLoginDebug({
+        step: "failed",
+        reason: "admin_not_found",
+        email,
+        adminFound: false,
+        passwordHashExists: false,
+      });
+
       return res.status(401).json({
         message: "Invalid admin credentials.",
       });
     }
 
+    logAdminLoginDebug({
+      step: "admin_lookup",
+      email,
+      adminFound: true,
+      adminId: admin.id,
+      passwordHashExists: Boolean(admin.password_hash),
+    });
+
     const passwordMatches = await bcrypt.compare(
       password,
-      admin.password_hash
+      admin.password_hash || ""
     );
+
+    logAdminLoginDebug({
+      step: "password_check",
+      email,
+      adminId: admin.id,
+      bcryptCompare: passwordMatches,
+    });
 
     if (!passwordMatches) {
       logSecurityEvent("admin_login_failed", req, {
@@ -65,13 +111,33 @@ async function loginAdmin(req, res) {
 
     const token = createAdminToken(admin);
 
+    logAdminLoginDebug({
+      step: "jwt_generated",
+      email,
+      adminId: admin.id,
+      jwtGenerated: Boolean(token),
+    });
+
     setAdminCookie(res, token);
+
+    logAdminLoginDebug({
+      step: "login_success",
+      email,
+      adminId: admin.id,
+      cookieCreated: true,
+    });
 
     return res.json({
       token,
       admin: Admin.toPublicAdmin(admin),
     });
   } catch (error) {
+    logAdminLoginDebug({
+      step: "failed",
+      reason: "exception",
+      email,
+      error: error.message,
+    });
     console.error("Unable to login admin:", error);
 
     return res.status(500).json({

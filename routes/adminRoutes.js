@@ -15,11 +15,11 @@ const {
   uploadProductImage,
   uploadSettingsImage,
 } = require("../middleware/upload");
-const { idParamRule, loginRules, validateRequest } = require("../middleware/validators");
+const { adminLoginRules, idParamRule, validateRequest } = require("../middleware/validators");
 
 const router = express.Router();
 
-router.post("/login", authLimiter, loginRules, validateRequest, loginAdmin);
+router.post("/login", authLimiter, adminLoginRules, validateRequest, loginAdmin);
 router.post("/logout", logoutAdmin);
 router.get("/me", adminAuth, getAdminProfile);
 
